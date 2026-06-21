@@ -289,7 +289,7 @@ export default function ClassroomPage() {
         <div className="flex-1 flex flex-col p-6 space-y-6 lg:overflow-y-auto lg:max-h-[calc(100vh-70px)]">
           
           {/* Box de Exibição de Conteúdo (Video/Live Room) */}
-          <div className="relative aspect-video w-full max-w-5xl mx-auto bg-[#0a0f1d] rounded-2xl overflow-hidden border border-slate-800 shadow-2xl min-h-[300px] sm:min-h-[450px]">
+          <div className="w-full max-w-5xl mx-auto">
             
             {isLiveActive() ? (
               user && currentLesson ? (
@@ -300,7 +300,7 @@ export default function ClassroomPage() {
               ) : null
             ) : (
               // Estado Offline da Live
-              <div className="absolute inset-0 flex flex-col items-center justify-center p-8 text-center bg-[#090d16] bg-radial-gradient">
+              <div className="w-full min-h-[380px] flex flex-col items-center justify-center p-8 text-center bg-[#090d16] rounded-2xl border border-slate-800 shadow-2xl">
                 <Video className="w-12 h-12 text-slate-600 mb-4" />
                 <h3 className="text-lg font-bold text-slate-300">A aula ao vivo ainda não começou</h3>
                 

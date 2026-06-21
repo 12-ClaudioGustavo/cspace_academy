@@ -82,7 +82,7 @@ export default function AdminDashboard() {
   const [loading, setLoading] = useState(true)
 
   // Controle de Abas Administrativas (Sidebar)
-  const [activeTab, setActiveTab] = useState<'overview' | 'pagamentos' | 'cursos' | 'exercicios' | 'usuarios'>('overview')
+  const [activeTab, setActiveTab] = useState<'overview' | 'pagamentos' | 'cursos' | 'exercicios' | 'usuarios' | 'conferencias'>('overview')
 
   // Visualizador de Comprovativo (Modal)
   const [selectedReceipt, setSelectedReceipt] = useState<string | null>(null)
@@ -744,6 +744,18 @@ ON CONFLICT (id) DO UPDATE SET role = '${newUserRole}';`
     .filter(e => e.status === 'aprovado')
     .reduce((acc, curr) => acc + (curr.curso?.preco || 0), 0)
 
+  // Todas as aulas ao vivo no sistema
+  const liveLessons = Object.entries(lessonsMap).flatMap(([courseId, lessons]) => {
+    const course = courses.find(c => c.id === courseId)
+    return (lessons || [])
+      .filter(l => l.data_hora_live)
+      .map(l => ({
+        ...l,
+        courseTitle: course?.titulo || 'Curso',
+        courseId
+      }))
+  }).sort((a, b) => new Date(a.data_hora_live!).getTime() - new Date(b.data_hora_live!).getTime())
+
   if (authLoading || loading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-950 text-white">
@@ -822,6 +834,21 @@ ON CONFLICT (id) DO UPDATE SET role = '${newUserRole}';`
             </button>
 
             <button
+              onClick={() => setActiveTab('conferencias')}
+              className={`w-full flex items-center justify-between p-3 rounded-xl text-xs font-semibold transition-all ${
+                activeTab === 'conferencias' 
+                  ? 'bg-indigo-500/10 text-indigo-400 border-l-4 border-indigo-500' 
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/30'
+              }`}
+            >
+              <span className="flex items-center gap-2.5">
+                <Video className="w-4 h-4 text-indigo-400" />
+                <span>Conferências (Live)</span>
+              </span>
+              <ChevronRight className="w-3.5 h-3.5 opacity-60" />
+            </button>
+
+            <button
               onClick={() => setActiveTab('exercicios')}
               className={`w-full flex items-center justify-between p-3 rounded-xl text-xs font-semibold transition-all ${
                 activeTab === 'exercicios' 
@@ -884,6 +911,7 @@ ON CONFLICT (id) DO UPDATE SET role = '${newUserRole}';`
             {activeTab === 'overview' && 'Painel de Métricas'}
             {activeTab === 'pagamentos' && 'Validação Bancária'}
             {activeTab === 'cursos' && 'Playlist & Grade Curricular'}
+            {activeTab === 'conferencias' && 'Salas de Conferência & Transmissões'}
             {activeTab === 'exercicios' && 'Quizzes Acadêmicos'}
             {activeTab === 'usuarios' && 'Controle de Membros'}
           </h2>
@@ -959,6 +987,51 @@ ON CONFLICT (id) DO UPDATE SET role = '${newUserRole}';`
                   <div className="h-10 w-10 bg-yellow-500/10 rounded-xl flex items-center justify-center text-yellow-400">
                     <Clock className="w-5 h-5" />
                   </div>
+                </div>
+              </div>
+
+              {/* Aulas ao Vivo Agendadas */}
+              <div className="p-6 bg-[#0b101d] border border-slate-800 rounded-2xl space-y-4 shadow-sm">
+                <div className="flex justify-between items-center border-b border-slate-850 pb-3">
+                  <h4 className="text-xs font-bold text-slate-200 uppercase tracking-wider flex items-center gap-1.5">
+                    <Video className="w-4 h-4 text-indigo-400" />
+                    <span>Aulas ao Vivo Agendadas</span>
+                  </h4>
+                  <button 
+                    onClick={() => setActiveTab('conferencias')} 
+                    className="text-[10px] text-indigo-400 hover:text-white uppercase font-bold cursor-pointer"
+                  >
+                    Ver Painel de Lives
+                  </button>
+                </div>
+
+                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                  {liveLessons.length === 0 ? (
+                    <p className="text-xs text-slate-500 py-4 col-span-full text-center">Nenhuma live agendada no sistema no momento.</p>
+                  ) : (
+                    liveLessons.slice(0, 3).map((lesson) => {
+                      const liveDate = new Date(lesson.data_hora_live!)
+                      return (
+                        <div key={lesson.id} className="p-3.5 bg-[#070b13] border border-slate-800 rounded-xl flex justify-between items-center gap-3">
+                          <div className="min-w-0">
+                            <p className="text-[9px] text-slate-500 font-bold uppercase truncate">{lesson.courseTitle}</p>
+                            <h4 className="text-xs font-bold text-white truncate mt-0.5">{lesson.titulo}</h4>
+                            <p className="text-[9px] text-rose-450 font-semibold mt-1 flex items-center gap-1">
+                              <Video className="w-3 h-3 animate-pulse" />
+                              <span>{liveDate.toLocaleString('pt-AO')}</span>
+                            </p>
+                          </div>
+                          <Link
+                            href={`/cursos/${lesson.courseId}/aula/${lesson.id}`}
+                            target="_blank"
+                            className="px-3 py-1.5 bg-indigo-500/10 hover:bg-indigo-500/20 border border-indigo-500/20 text-indigo-400 rounded-xl text-[10px] font-bold shrink-0 transition-colors cursor-pointer"
+                          >
+                            Entrar
+                          </Link>
+                        </div>
+                      )
+                    })
+                  )}
                 </div>
               </div>
 
@@ -1438,9 +1511,19 @@ ON CONFLICT (id) DO UPDATE SET role = '${newUserRole}';`
                                 <p className="text-xs font-bold text-slate-200">{lesson.titulo}</p>
                                 <p className="text-[10px] text-slate-400 mt-1 line-clamp-1">{lesson.descricao}</p>
                                 {lesson.data_hora_live && (
-                                  <div className="flex items-center gap-1.5 text-[9px] text-red-400 mt-1.5 font-semibold">
-                                    <Video className="w-3 h-3" />
-                                    <span>Live: {new Date(lesson.data_hora_live).toLocaleString('pt-AO')}</span>
+                                  <div className="flex flex-wrap items-center gap-2 mt-2">
+                                    <span className="flex items-center gap-1.5 text-[9px] text-red-400 font-semibold bg-rose-500/10 border border-rose-500/20 px-2 py-0.5 rounded-full">
+                                      <Video className="w-3 h-3 animate-pulse" />
+                                      <span>Live: {new Date(lesson.data_hora_live).toLocaleString('pt-AO')}</span>
+                                    </span>
+                                    <Link
+                                      href={`/cursos/${selectedCourseId}/aula/${lesson.id}`}
+                                      target="_blank"
+                                      className="inline-flex items-center gap-1 bg-indigo-500/10 hover:bg-indigo-500/20 border border-indigo-500/20 text-indigo-400 px-3 py-1 rounded-xl text-[10px] font-bold transition-all cursor-pointer"
+                                    >
+                                      <span>Entrar na Sala</span>
+                                      <ChevronRight className="w-3 h-3" />
+                                    </Link>
                                   </div>
                                 )}
                                 
@@ -1846,6 +1929,119 @@ ON CONFLICT (id) DO UPDATE SET role = '${newUserRole}';`
                     </tbody>
                   </table>
                 </div>
+              </div>
+
+            </div>
+          )}
+
+          {/* --- VIEW: CONFERÊNCIAS (ADMIN) --- */}
+          {activeTab === 'conferencias' && (
+            <div className="space-y-8">
+              
+              {/* Grid 2 colunas: Sala Geral e Próximas Lives */}
+              <div className="grid gap-8 lg:grid-cols-5 items-start">
+                
+                {/* Sala de Reunião Geral */}
+                <div className="lg:col-span-2 p-6 bg-[#0b101d] border border-slate-800 rounded-2xl shadow-2xl space-y-6">
+                  <div className="space-y-2">
+                    <span className="text-[9px] uppercase font-bold tracking-wider text-indigo-400 bg-indigo-400/10 px-2.5 py-1 rounded-full border border-indigo-500/20 w-fit block">
+                      Administração
+                    </span>
+                    <h3 className="text-sm font-bold text-white uppercase tracking-wider">Sala de Conferência Geral</h3>
+                    <p className="text-xs text-slate-400 leading-relaxed">
+                      Como administrador, você pode iniciar uma conferência geral para reuniões administrativas, lives rápidas com alunos ou plantões de tutoria a qualquer momento.
+                    </p>
+                  </div>
+
+                  <div className="p-4 bg-[#070b13] border border-slate-800 rounded-xl space-y-2 text-xs">
+                    <div className="flex justify-between items-center text-slate-400">
+                      <span>Nome da Sala:</span>
+                      <span className="font-mono text-white text-[11px]">sala-geral-admin-{user?.id.substring(0, 8)}</span>
+                    </div>
+                    <div className="flex justify-between items-center text-slate-400">
+                      <span>Link de Acesso:</span>
+                      <span className="text-[10px] text-indigo-400 truncate max-w-[170px]">
+                        /cursos/{courses[0]?.id || 'geral'}/aula/sala-geral-{user?.id}
+                      </span>
+                    </div>
+                  </div>
+
+                  {courses.length > 0 ? (
+                    <Link
+                      href={`/cursos/${courses[0].id}/aula/sala-geral-${user?.id}`}
+                      target="_blank"
+                      className="flex items-center justify-center gap-2 w-full py-3 bg-gradient-to-r from-indigo-600 to-indigo-700 hover:from-indigo-550 hover:to-indigo-650 text-white rounded-xl text-xs font-bold transition-all shadow-lg shadow-indigo-650/15 cursor-pointer"
+                    >
+                      <Video className="w-4 h-4" />
+                      <span>Iniciar Reunião Agora</span>
+                    </Link>
+                  ) : (
+                    <button
+                      disabled
+                      className="flex items-center justify-center gap-2 w-full py-3 bg-slate-805 text-slate-500 rounded-xl text-xs font-bold cursor-not-allowed"
+                    >
+                      <Video className="w-4 h-4" />
+                      <span>Aguardando cadastro de curso</span>
+                    </button>
+                  )}
+                </div>
+
+                {/* Lista de Transmissões Agendadas */}
+                <div className="lg:col-span-3 p-6 bg-[#0b101d] border border-slate-800 rounded-2xl shadow-2xl space-y-4">
+                  <h3 className="text-sm font-bold text-white uppercase tracking-wider border-b border-slate-850 pb-3 flex items-center justify-between">
+                    <span>Todas as Aulas ao Vivo Agendadas ({liveLessons.length})</span>
+                  </h3>
+
+                  <div className="space-y-4 max-h-[460px] overflow-y-auto pr-2">
+                    {liveLessons.length === 0 ? (
+                      <div className="text-center py-12 bg-[#070b13] border border-slate-850 rounded-xl space-y-2">
+                        <Video className="w-8 h-8 text-slate-650 mx-auto" />
+                        <p className="text-xs text-slate-500">Nenhuma aula ao vivo agendada.</p>
+                        <p className="text-[10px] text-slate-600">Agende transmissões na aba "Cursos & Aulas" ao configurar a aula.</p>
+                      </div>
+                    ) : (
+                      liveLessons.map(lesson => {
+                        const liveDate = new Date(lesson.data_hora_live!)
+                        const isToday = liveDate.toDateString() === new Date().toDateString()
+                        
+                        return (
+                          <div
+                            key={lesson.id}
+                            className="flex flex-col sm:flex-row sm:items-center justify-between p-4 bg-[#070b13] border border-slate-800 rounded-xl hover:border-slate-700 transition-all gap-4"
+                          >
+                            <div className="space-y-1.5 flex-1 min-w-0">
+                              <div className="flex items-center gap-2">
+                                <span className="text-[9px] font-bold text-indigo-400 uppercase tracking-wider truncate max-w-[150px]">
+                                  {lesson.courseTitle}
+                                </span>
+                                {isToday && (
+                                  <span className="text-[8px] bg-rose-500 text-white font-bold px-1.5 py-0.5 rounded uppercase animate-pulse">
+                                    Hoje
+                                  </span>
+                                )}
+                              </div>
+                              <h4 className="text-xs font-bold text-white truncate">{lesson.titulo}</h4>
+                              <p className="text-[10px] text-slate-450 flex items-center gap-1">
+                                <Clock className="w-3.5 h-3.5 text-slate-500" />
+                                <span>{liveDate.toLocaleString('pt-AO')}</span>
+                              </p>
+                            </div>
+
+                            <Link
+                              href={`/cursos/${lesson.courseId}/aula/${lesson.id}`}
+                              target="_blank"
+                              className="px-4 py-2 bg-indigo-650 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition-all shadow-md shrink-0 text-center flex items-center justify-center gap-1.5 cursor-pointer"
+                            >
+                              <span>Entrar na Sala</span>
+                              <ChevronRight className="w-3.5 h-3.5" />
+                            </Link>
+                          </div>
+                        )
+                      })
+                    )}
+                  </div>
+                </div>
+
               </div>
 
             </div>

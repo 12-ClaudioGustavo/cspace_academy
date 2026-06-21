@@ -5,7 +5,8 @@ import { Perfil, isSupabaseConfigured } from '@/lib/db'
 import { createClient } from '@/lib/supabase/client'
 import { 
   Video, VideoOff, Mic, MicOff, Monitor, StopCircle, 
-  Play, Users, Shield, AlertCircle, RefreshCw, ExternalLink 
+  Play, Users, Shield, AlertCircle, RefreshCw, ExternalLink,
+  MessageSquare, Send, X 
 } from 'lucide-react'
 
 interface CustomLiveRoomProps {
@@ -92,7 +93,7 @@ function ExternalStreamPlayer({ url }: { url: string }) {
 
 // ==========================================
 // 2. SALA WEBRTC IN-HOUSE (P2P + Supabase)
-// ==========================================
+// ========================================
 function WebRTCLiveRoom({ 
   roomName, user, isProfessor 
 }: { roomName: string, user: Perfil, isProfessor: boolean }) {
@@ -103,9 +104,20 @@ function WebRTCLiveRoom({
   const [cameraOn, setCameraOn] = useState(true)
   const [sharingScreen, setSharingScreen] = useState(false)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
+
+  // Remote Tracks state for student
+  const [remoteTracks, setRemoteTracks] = useState<MediaStreamTrack[]>([])
+  
+  // Chat state
+  const [messages, setMessages] = useState<any[]>([])
+  const [chatOpen, setChatOpen] = useState(false)
+  const [chatInput, setChatInput] = useState('')
+  const [unreadCount, setUnreadCount] = useState(0)
   
   const localVideoRef = useRef<HTMLVideoElement>(null)
   const remoteVideoRef = useRef<HTMLVideoElement>(null)
+  const pipVideoRef = useRef<HTMLVideoElement>(null)
+  const messagesEndRef = useRef<HTMLDivElement>(null)
   
   const localStreamRef = useRef<MediaStream | null>(null)
   const screenStreamRef = useRef<MediaStream | null>(null)
@@ -113,12 +125,47 @@ function WebRTCLiveRoom({
   // Conexões WebRTC
   // Professor guarda conexão para cada estudante: { [studentId]: RTCPeerConnection }
   const pcsRef = useRef<{ [key: string]: RTCPeerConnection }>({})
+  // Senders de tela do Professor para cada estudante: { [studentId]: RTCRtpSender }
+  const screenSendersRef = useRef<{ [key: string]: RTCRtpSender }>({})
   // Estudante guarda conexão com o Professor
   const pcRef = useRef<RTCPeerConnection | null>(null)
   
   // Canal Supabase Realtime
   const channelRef = useRef<any>(null)
   const supabase = isSupabaseConfigured() ? createClient() : null
+
+  // Ref to track streamActive without resubscribing
+  const streamActiveRef = useRef(streamActive)
+  useEffect(() => {
+    streamActiveRef.current = streamActive
+  }, [streamActive])
+
+  // Track user presence metadata and update isStreaming when streamActive changes
+  useEffect(() => {
+    if (channelRef.current && supabase) {
+      channelRef.current.track({
+        nome: user.nome,
+        role: user.role,
+        isStreaming: isProfessor ? streamActive : false
+      })
+    }
+  }, [streamActive, isProfessor, user.nome, user.role, supabase])
+
+  // Scroll to bottom of chat when new messages arrive
+  useEffect(() => {
+    if (messagesEndRef.current) {
+      messagesEndRef.current.scrollIntoView({ behavior: 'smooth' })
+    }
+  }, [messages, chatOpen])
+
+  // Helper for student to update tracks list
+  const updateRemoteTracks = () => {
+    if (!pcRef.current) return
+    const videoTracks = pcRef.current.getReceivers()
+      .filter(r => r.track && r.track.kind === 'video')
+      .map(r => r.track!)
+    setRemoteTracks(videoTracks)
+  }
 
   // 1. Inicializa o Canal de Realtime e Presença
   useEffect(() => {
@@ -139,7 +186,7 @@ function WebRTCLiveRoom({
 
     channelRef.current = channel
 
-    // Ouvir mensagens de sinalização do WebRTC
+    // Ouvir mensagens de sinalização do WebRTC e Chat
     channel.on('broadcast', { event: 'webrtc-signal' }, async ({ payload }) => {
       const { targetId, senderId, type, data } = payload
       
@@ -165,10 +212,18 @@ function WebRTCLiveRoom({
       }
     })
 
+    channel.on('broadcast', { event: 'chat-message' }, ({ payload }) => {
+      setMessages(prev => [...prev, payload])
+      if (!chatOpen) {
+        setUnreadCount(c => c + 1)
+      }
+    })
+
     // Presença: rastrear quem está online na sala
     channel.on('presence', { event: 'sync' }, () => {
       const presenceState = channel.presenceState()
       const list: string[] = []
+      
       Object.keys(presenceState).forEach(id => {
         const pres = presenceState[id] as any
         if (pres && pres[0]) {
@@ -176,6 +231,18 @@ function WebRTCLiveRoom({
         }
       })
       setOnlineStudents(list.filter(n => n !== user.nome))
+
+      // Se for professor e a live estiver ativa, iniciar conexão com quem não tiver conexão ativa
+      if (isProfessor && streamActiveRef.current && localStreamRef.current) {
+        Object.keys(presenceState).forEach(id => {
+          if (id !== user.id) {
+            const pc = pcsRef.current[id]
+            if (!pc || pc.connectionState === 'disconnected' || pc.connectionState === 'failed' || pc.connectionState === 'closed') {
+              initiateConnectionToStudent(id, localStreamRef.current!)
+            }
+          }
+        })
+      }
     })
 
     // Inscreve no canal com metadata do utilizador
@@ -183,7 +250,8 @@ function WebRTCLiveRoom({
       if (status === 'SUBSCRIBED') {
         await channel.track({
           nome: user.nome,
-          role: user.role
+          role: user.role,
+          isStreaming: isProfessor ? streamActiveRef.current : false
         })
       }
     })
@@ -208,6 +276,7 @@ function WebRTCLiveRoom({
     // Fecha conexões do Professor
     Object.values(pcsRef.current).forEach(pc => pc.close())
     pcsRef.current = {}
+    screenSendersRef.current = {}
     
     // Fecha conexão do Estudante
     if (pcRef.current) {
@@ -217,6 +286,7 @@ function WebRTCLiveRoom({
     
     setStreamActive(false)
     setSharingScreen(false)
+    setRemoteTracks([])
   }
 
   // ==========================================
@@ -261,8 +331,17 @@ function WebRTCLiveRoom({
     })
     pcsRef.current[studentId] = pc
 
-    // Adiciona tracks locais
+    // Adiciona tracks locais de camera e áudio
     stream.getTracks().forEach(track => pc.addTrack(track, stream))
+
+    // Se estiver a partilhar ecrã, adiciona também a track do ecrã
+    if (sharingScreen && screenStreamRef.current) {
+      const screenTrack = screenStreamRef.current.getVideoTracks()[0]
+      if (screenTrack) {
+        const sender = pc.addTrack(screenTrack, screenStreamRef.current)
+        screenSendersRef.current[studentId] = sender
+      }
+    }
 
     // Envia candidatos ICE
     pc.onicecandidate = (event) => {
@@ -327,20 +406,40 @@ function WebRTCLiveRoom({
 
   const toggleScreenShare = async () => {
     if (sharingScreen) {
-      // Desativa Screen Share, retorna para Câmara
+      // Para a partilha
       if (screenStreamRef.current) {
         screenStreamRef.current.getTracks().forEach(t => t.stop())
         screenStreamRef.current = null
       }
-      
-      const cameraTrack = localStreamRef.current?.getVideoTracks()[0]
-      if (cameraTrack) {
-        // Substitui track em todas as conexões
-        Object.values(pcsRef.current).forEach(pc => {
-          const sender = pc.getSenders().find(s => s.track?.kind === 'video')
-          if (sender) sender.replaceTrack(cameraTrack)
-        })
-      }
+
+      // Remove a track em todas as conexões
+      Object.keys(pcsRef.current).forEach(async (studentId) => {
+        const pc = pcsRef.current[studentId]
+        const sender = screenSendersRef.current[studentId]
+        if (pc && sender) {
+          try {
+            pc.removeTrack(sender)
+            delete screenSendersRef.current[studentId]
+
+            // Renegocia
+            const offer = await pc.createOffer()
+            await pc.setLocalDescription(offer)
+            channelRef.current.send({
+              type: 'broadcast',
+              event: 'webrtc-signal',
+              payload: {
+                targetId: studentId,
+                senderId: user.id,
+                type: 'offer',
+                data: offer
+              }
+            })
+          } catch (e) {
+            console.error('Erro ao remover track de ecrã:', studentId, e)
+          }
+        }
+      })
+
       setSharingScreen(false)
     } else {
       // Inicia Screen Share
@@ -349,21 +448,36 @@ function WebRTCLiveRoom({
         screenStreamRef.current = stream
         const screenTrack = stream.getVideoTracks()[0]
 
-        // Quando o compartilhamento de tela é interrompido pelo utilizador nativamente
         screenTrack.onended = () => {
           toggleScreenShare()
         }
 
-        // Substitui track em todas as conexões de alunos ativos
-        Object.values(pcsRef.current).forEach(pc => {
-          const sender = pc.getSenders().find(s => s.track?.kind === 'video')
-          if (sender) sender.replaceTrack(screenTrack)
-        })
+        // Adiciona track em todas as conexões de alunos ativos
+        Object.keys(pcsRef.current).forEach(async (studentId) => {
+          const pc = pcsRef.current[studentId]
+          if (pc) {
+            try {
+              const sender = pc.addTrack(screenTrack, stream)
+              screenSendersRef.current[studentId] = sender
 
-        // Atualiza localVideo preview do professor
-        if (localVideoRef.current) {
-          localVideoRef.current.srcObject = stream
-        }
+              // Renegocia
+              const offer = await pc.createOffer()
+              await pc.setLocalDescription(offer)
+              channelRef.current.send({
+                type: 'broadcast',
+                event: 'webrtc-signal',
+                payload: {
+                  targetId: studentId,
+                  senderId: user.id,
+                  type: 'offer',
+                  data: offer
+                }
+              })
+            } catch (e) {
+              console.error('Erro ao adicionar track de ecrã:', studentId, e)
+            }
+          }
+        })
 
         setSharingScreen(true)
       } catch (err) {
@@ -372,44 +486,75 @@ function WebRTCLiveRoom({
     }
   }
 
+  // Update professor video elements
+  useEffect(() => {
+    if (!isProfessor) return
+
+    if (streamActive) {
+      if (sharingScreen) {
+        if (localVideoRef.current && screenStreamRef.current) {
+          localVideoRef.current.srcObject = screenStreamRef.current
+        }
+        if (pipVideoRef.current && localStreamRef.current) {
+          pipVideoRef.current.srcObject = localStreamRef.current
+        }
+      } else {
+        if (localVideoRef.current && localStreamRef.current) {
+          localVideoRef.current.srcObject = localStreamRef.current
+        }
+        if (pipVideoRef.current) {
+          pipVideoRef.current.srcObject = null
+        }
+      }
+    }
+  }, [streamActive, sharingScreen, isProfessor])
+
   // ==========================================
   // LOGICA DO ESTUDANTE (Viewer)
   // ==========================================
   const handleOffer = async (professorId: string, offer: RTCSessionDescriptionInit) => {
-    if (pcRef.current) {
-      pcRef.current.close()
-    }
+    let pc = pcRef.current
+    if (!pc || pc.connectionState === 'closed') {
+      pc = new RTCPeerConnection({
+        iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+      })
+      pcRef.current = pc
 
-    const pc = new RTCPeerConnection({
-      iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
-    })
-    pcRef.current = pc
-
-    pc.onicecandidate = (event) => {
-      if (event.candidate && channelRef.current) {
-        channelRef.current.send({
-          type: 'broadcast',
-          event: 'webrtc-signal',
-          payload: {
-            targetId: professorId,
-            senderId: user.id,
-            type: 'ice-candidate',
-            data: event.candidate
-          }
-        })
+      pc.onicecandidate = (event) => {
+        if (event.candidate && channelRef.current) {
+          channelRef.current.send({
+            type: 'broadcast',
+            event: 'webrtc-signal',
+            payload: {
+              targetId: professorId,
+              senderId: user.id,
+              type: 'ice-candidate',
+              data: event.candidate
+            }
+          })
+        }
       }
-    };
 
-    pc.ontrack = (event) => {
-      setStreamActive(true)
-      if (remoteVideoRef.current) {
-        remoteVideoRef.current.srcObject = event.streams[0]
+      const currentPc = pc;
+
+      currentPc.ontrack = () => {
+        setStreamActive(true)
+        updateRemoteTracks()
+      }
+
+      currentPc.onconnectionstatechange = () => {
+        if (currentPc.connectionState === 'disconnected' || currentPc.connectionState === 'failed' || currentPc.connectionState === 'closed') {
+          setStreamActive(false)
+          setRemoteTracks([])
+        }
       }
     }
 
     await pc.setRemoteDescription(new RTCSessionDescription(offer))
     const answer = await pc.createAnswer()
     await pc.setLocalDescription(answer)
+
+    updateRemoteTracks()
 
     if (channelRef.current) {
       channelRef.current.send({
@@ -425,148 +570,303 @@ function WebRTCLiveRoom({
     }
   }
 
+  // Update remote video streams for student
+  useEffect(() => {
+    if (isProfessor) return
+
+    if (remoteTracks.length === 0) {
+      if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null
+      if (pipVideoRef.current) pipVideoRef.current.srcObject = null
+      return
+    }
+
+    if (remoteTracks.length === 1) {
+      // Apenas Camera
+      if (remoteVideoRef.current) {
+        remoteVideoRef.current.srcObject = new MediaStream([remoteTracks[0]])
+      }
+      if (pipVideoRef.current) pipVideoRef.current.srcObject = null
+    } else {
+      // Ecrã + Camera
+      if (remoteVideoRef.current) {
+        remoteVideoRef.current.srcObject = new MediaStream([remoteTracks[1]])
+      }
+      if (pipVideoRef.current) {
+        pipVideoRef.current.srcObject = new MediaStream([remoteTracks[0]])
+      }
+    }
+  }, [remoteTracks, isProfessor])
+
+  // Chat actions
+  const sendChatMessage = () => {
+    if (!chatInput.trim() || !channelRef.current) return
+    const newMessage = {
+      id: `${user.id}-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+      senderId: user.id,
+      nome: user.nome,
+      role: user.role,
+      text: chatInput.trim(),
+      timestamp: new Date().toLocaleTimeString('pt-AO', { hour: '2-digit', minute: '2-digit' })
+    }
+
+    channelRef.current.send({
+      type: 'broadcast',
+      event: 'chat-message',
+      payload: newMessage
+    })
+
+    setMessages(prev => [...prev, newMessage])
+    setChatInput('')
+  }
+
+  const showPip = isProfessor ? (streamActive && sharingScreen && cameraOn) : (streamActive && remoteTracks.length >= 2);
+
   return (
-    <div className="relative h-full w-full bg-slate-950 rounded-2xl overflow-hidden shadow-2xl border border-slate-800/80 flex flex-col min-h-[300px] sm:min-h-[450px]">
+    <div className="w-full bg-slate-950 rounded-2xl shadow-2xl border border-slate-800/80 flex flex-col overflow-hidden" style={{ minHeight: '450px' }}>
       
-      {/* Badge Estado Live */}
-      <div className="absolute top-4 left-4 z-20 flex items-center gap-2">
-        {streamActive ? (
-          <span className="flex items-center gap-1 px-3 py-1 text-[9px] font-bold rounded-full bg-red-600 text-white shadow-lg animate-pulse uppercase tracking-wider">
-            <span className="h-1.5 w-1.5 rounded-full bg-white animate-ping" />
-            <span>AO VIVO</span>
-          </span>
-        ) : (
-          <span className="flex items-center gap-1 px-3 py-1 text-[9px] font-bold rounded-full bg-slate-850 bg-slate-800 text-slate-450 border border-slate-700/50 uppercase tracking-wider">
-            <span>OFF-LINE</span>
-          </span>
-        )}
-        
-        <span className="flex items-center gap-1 px-2.5 py-1 text-[9px] font-bold rounded-full bg-slate-900/80 text-indigo-400 border border-slate-800/60 shadow">
-          <Users className="w-3 h-3 text-indigo-500" />
-          <span>{onlineStudents.length + 1} online</span>
-        </span>
-      </div>
-
-      {/* Título de Perfil/Moderador */}
-      <div className="absolute top-4 right-4 z-20">
-        <span className="hidden sm:inline-flex items-center gap-1 bg-slate-900/95 border border-slate-850 px-3 py-1 rounded-full text-[9px] font-bold text-slate-300">
-          {isProfessor ? <Shield className="w-3 h-3 text-indigo-400" /> : <Users className="w-3 h-3 text-indigo-400" />}
-          <span>{isProfessor ? 'Professor / Canal' : 'Aluno / Visualizador'}</span>
-        </span>
-      </div>
-
-      {/* Main Stream Area */}
-      <div className="flex-1 w-full relative flex items-center justify-center bg-[#070b13]">
-        {isProfessor ? (
-          streamActive ? (
-            <video
-              ref={localVideoRef}
-              autoPlay
-              playsInline
-              muted
-              className="w-full h-full object-cover scale-x-[-1]"
-            />
+      {/* Badges de Estado */}
+      <div className="relative flex items-center justify-between px-4 py-2.5 bg-[#080c17] border-b border-slate-800/60 shrink-0">
+        <div className="flex items-center gap-2">
+          {streamActive ? (
+            <span className="flex items-center gap-1.5 px-3 py-1 text-[9px] font-bold rounded-full bg-red-600 text-white shadow-lg animate-pulse uppercase tracking-wider">
+              <span className="h-1.5 w-1.5 rounded-full bg-white animate-ping" />
+              <span>AO VIVO</span>
+            </span>
           ) : (
-            <div className="text-center p-6 space-y-4 max-w-sm">
-              <div className="h-12 w-12 rounded-full bg-indigo-500/10 text-indigo-400 flex items-center justify-center mx-auto border border-indigo-500/20">
-                <Video className="w-6 h-6" />
+            <span className="flex items-center gap-1.5 px-3 py-1 text-[9px] font-bold rounded-full bg-slate-800 text-slate-400 border border-slate-700/50 uppercase tracking-wider">
+              <span className="h-1.5 w-1.5 rounded-full bg-slate-600" />
+              <span>OFF-LINE</span>
+            </span>
+          )}
+          
+          <span className="flex items-center gap-1 px-2.5 py-1 text-[9px] font-bold rounded-full bg-slate-900 text-indigo-400 border border-slate-800 shadow">
+            <Users className="w-3 h-3 text-indigo-500" />
+            <span>{onlineStudents.length + 1} online</span>
+          </span>
+        </div>
+
+        <div className="flex items-center gap-3">
+          <span className="hidden sm:inline-flex items-center gap-1 bg-slate-800 border border-slate-700 px-3 py-1 rounded-full text-[9px] font-bold text-slate-300">
+            {isProfessor ? <Shield className="w-3 h-3 text-indigo-400" /> : <Users className="w-3 h-3 text-indigo-400" />}
+            <span>{isProfessor ? 'Professor / Canal' : 'Aluno / Visualizador'}</span>
+          </span>
+          
+          {/* Chat Toggle Button */}
+          <button 
+            onClick={() => { setChatOpen(!chatOpen); setUnreadCount(0); }} 
+            className={`relative p-1.5 rounded-lg border text-slate-400 hover:text-white transition-colors ${chatOpen ? 'bg-indigo-600/20 border-indigo-500/35 text-indigo-400' : 'bg-slate-900 border-slate-800'}`}
+          >
+            <MessageSquare className="w-4 h-4" />
+            {!chatOpen && unreadCount > 0 && (
+              <span className="absolute -top-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-red-600 text-[8px] font-black text-white animate-bounce">
+                {unreadCount}
+              </span>
+            )}
+          </button>
+        </div>
+      </div>
+
+      {/* Main Workspace: Stream + Chat */}
+      <div className="flex-1 flex flex-col md:flex-row min-h-0 relative">
+        
+        {/* Stream Area */}
+        <div className="flex-1 relative flex items-center justify-center bg-[#070b13] min-h-[300px]">
+          {isProfessor ? (
+            streamActive ? (
+              <video
+                ref={localVideoRef}
+                autoPlay
+                playsInline
+                muted
+                className="absolute inset-0 w-full h-full object-cover scale-x-[-1]"
+              />
+            ) : (
+              <div className="text-center p-6 space-y-5 max-w-sm">
+                <div className="h-16 w-16 rounded-2xl bg-indigo-500/10 text-indigo-400 flex items-center justify-center mx-auto border border-indigo-500/20">
+                  <Video className="w-8 h-8" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-slate-200 text-sm">Iniciar Live do Professor</h3>
+                  <p className="text-[11px] text-slate-500 mt-1.5 leading-relaxed">
+                    Pronto para transmitir a sua aula? Utilize o nosso sistema WebRTC in-house sem limite de tempo para se conectar diretamente com seus alunos.
+                  </p>
+                </div>
+                <button
+                  onClick={startBroadcast}
+                  className="w-full px-5 py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-bold shadow-lg transition-all flex items-center justify-center gap-2 hover:scale-[1.02] active:scale-[0.98]"
+                >
+                  <Play className="w-4 h-4" />
+                  <span>Iniciar Transmissão</span>
+                </button>
               </div>
-              <div>
-                <h3 className="font-bold text-slate-200 text-sm">Iniciar Live do Professor</h3>
-                <p className="text-[11px] text-slate-500 mt-1 leading-relaxed">
-                  Pronto para transmitir a sua aula? Utilize o nosso sistema WebRTC in-house sem limite de tempo para se conectar diretamente com seus alunos.
-                </p>
+            )
+          ) : (
+            streamActive ? (
+              <video
+                ref={remoteVideoRef}
+                autoPlay
+                playsInline
+                className="absolute inset-0 w-full h-full object-cover"
+              />
+            ) : (
+              <div className="text-center p-6 space-y-3">
+                <div className="h-12 w-12 rounded-full bg-indigo-500/10 text-indigo-400 flex items-center justify-center mx-auto border border-indigo-500/15">
+                  <RefreshCw className="w-5 h-5 animate-spin" />
+                </div>
+                <div>
+                  <h3 className="font-semibold text-slate-300 text-xs">Aguardando o Professor...</h3>
+                  <p className="text-[10px] text-slate-500 mt-1 leading-normal max-w-xs mx-auto">
+                    A aula iniciará automaticamente assim que o professor iniciar a sua transmissão WebRTC em tempo real.
+                  </p>
+                </div>
               </div>
+            )
+          )}
+
+          {/* Floating PIP Video overlay */}
+          {showPip && (
+            <div className="absolute bottom-4 right-4 w-32 sm:w-44 aspect-video bg-slate-900 rounded-xl overflow-hidden shadow-2xl border border-slate-700/60 z-30 transition-all">
+              <video
+                ref={pipVideoRef}
+                autoPlay
+                playsInline
+                muted={isProfessor}
+                className="w-full h-full object-cover scale-x-[-1]"
+              />
+              <div className="absolute top-1 left-1 bg-slate-900/80 px-1 py-0.5 rounded text-[7px] font-bold text-slate-300">
+                Câmara
+              </div>
+            </div>
+          )}
+
+          {/* Error overlay */}
+          {errorMsg && (
+            <div className="absolute inset-0 bg-[#090d16]/95 z-30 flex flex-col items-center justify-center p-6 text-center">
+              <AlertCircle className="w-10 h-10 text-rose-500 mb-3" />
+              <h4 className="font-bold text-slate-200 text-sm">Erro de Ligação</h4>
+              <p className="text-[11px] text-slate-400 mt-1 max-w-xs leading-normal">{errorMsg}</p>
               <button
-                onClick={startBroadcast}
-                className="w-full px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold shadow transition-colors flex items-center justify-center gap-1.5"
+                onClick={() => { setErrorMsg(null); startBroadcast(); }}
+                className="mt-4 px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-xl text-xs font-semibold border border-slate-700 transition-colors"
               >
-                <Play className="w-4 h-4" />
-                <span>Iniciar Transmissão de 2h+</span>
+                Tentar Novamente
               </button>
             </div>
-          )
-        ) : (
-          streamActive ? (
-            <video
-              ref={remoteVideoRef}
-              autoPlay
-              playsInline
-              className="w-full h-full object-cover"
-            />
-          ) : (
-            <div className="text-center p-6 space-y-3">
-              <div className="h-10 w-10 animate-pulse rounded-full bg-indigo-500/10 text-indigo-400 flex items-center justify-center mx-auto border border-indigo-500/15">
-                <RefreshCw className="w-5 h-5 animate-spin" />
-              </div>
-              <div>
-                <h3 className="font-semibold text-slate-300 text-xs">Aguardando o Professor...</h3>
-                <p className="text-[10px] text-slate-500 mt-1 leading-normal max-w-xs mx-auto">
-                  A aula iniciará automaticamente assim que o professor iniciar a sua transmissão WebRTC em tempo real.
-                </p>
-              </div>
-            </div>
-          )
-        )}
+          )}
+        </div>
 
-        {/* Error overlay */}
-        {errorMsg && (
-          <div className="absolute inset-0 bg-[#090d16]/95 z-30 flex flex-col items-center justify-center p-6 text-center">
-            <AlertCircle className="w-10 h-10 text-rose-500 mb-3" />
-            <h4 className="font-bold text-slate-200 text-sm">Erro de Ligação</h4>
-            <p className="text-[11px] text-slate-450 mt-1 max-w-xs leading-normal">{errorMsg}</p>
-            <button
-              onClick={() => { setErrorMsg(null); startBroadcast(); }}
-              className="mt-4 px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-xl text-xs font-semibold border border-slate-750 transition-colors"
-            >
-              Tentar Novamente
-            </button>
+        {/* Chat Sidebar */}
+        {chatOpen && (
+          <div className="w-full md:w-80 border-t md:border-t-0 md:border-l border-slate-800 bg-[#0c1220] flex flex-col shrink-0 h-[250px] md:h-auto">
+            {/* Chat Header */}
+            <div className="px-3 py-2 border-b border-slate-800 flex justify-between items-center bg-[#080c17]">
+              <span className="text-[10px] font-bold text-slate-350 uppercase tracking-wider">Chat da Live</span>
+              <button onClick={() => setChatOpen(false)} className="text-slate-500 hover:text-white transition-colors">
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+
+            {/* Messages List */}
+            <div className="flex-1 overflow-y-auto p-3 space-y-3">
+              {messages.length === 0 ? (
+                <p className="text-[10px] text-slate-500 text-center py-6 leading-relaxed">Nenhuma dúvida enviada ainda.<br />Seja o primeiro a enviar!</p>
+              ) : (
+                messages.map(msg => {
+                  const isMe = msg.senderId === user.id;
+                  const isDocente = msg.role === 'professor' || msg.role === 'admin';
+                  return (
+                    <div key={msg.id} className={`flex flex-col ${isMe ? 'items-end' : 'items-start'}`}>
+                      <div className="flex items-center gap-1 mb-0.5 max-w-full">
+                        <span className="text-[9px] font-semibold text-slate-400 truncate max-w-[100px]">{msg.nome}</span>
+                        {isDocente && (
+                          <span className="text-[7px] bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 px-1 py-0.2 rounded font-black uppercase tracking-wide">
+                            Docente
+                          </span>
+                        )}
+                        <span className="text-[7px] text-slate-500">{msg.timestamp}</span>
+                      </div>
+                      <div className={`px-2.5 py-1.5 rounded-xl text-xs leading-normal max-w-[90%] break-words ${isMe ? 'bg-indigo-600 text-white rounded-tr-none' : 'bg-[#111622] border border-slate-800/80 text-slate-200 rounded-tl-none'}`}>
+                        {msg.text}
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+              <div ref={messagesEndRef} />
+            </div>
+
+            {/* Send Input */}
+            <div className="p-2 border-t border-slate-800/70 bg-[#080c17] flex gap-2">
+              <input
+                type="text"
+                value={chatInput}
+                onChange={e => setChatInput(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') sendChatMessage(); }}
+                placeholder="Escreva a sua dúvida..."
+                className="flex-1 min-w-0 px-2.5 py-1.5 bg-[#0e1322] border border-slate-800 rounded-lg focus:outline-none focus:border-slate-700 text-xs text-slate-200 placeholder-slate-500"
+              />
+              <button 
+                onClick={sendChatMessage}
+                className="p-1.5 bg-indigo-650 hover:bg-indigo-700 text-white rounded-lg transition-colors flex items-center justify-center shrink-0"
+              >
+                <Send className="w-3.5 h-3.5" />
+              </button>
+            </div>
           </div>
         )}
       </div>
 
-      {/* Professor Controls Drawer (Apenas para Professor Ativo) */}
+      {/* Barra de Controles do Professor */}
       {isProfessor && streamActive && (
-        <div className="p-4 bg-slate-900 border-t border-slate-850 flex items-center justify-between gap-4 z-20">
+        <div className="shrink-0 px-4 py-3 bg-[#0c1220] border-t border-slate-800 flex items-center justify-between gap-3">
           <div className="flex items-center gap-2">
+            {/* Microfone */}
             <button
               onClick={toggleMic}
-              className={`p-2.5 rounded-xl border text-xs font-semibold transition-all ${
-                micOn 
-                  ? 'bg-slate-800 hover:bg-slate-750 border-slate-700 text-slate-200' 
-                  : 'bg-rose-500/15 border-rose-500/25 text-rose-400 hover:bg-rose-500/25'
-              }`}
               title={micOn ? 'Desativar Microfone' : 'Ativar Microfone'}
+              className={`flex items-center gap-1.5 px-3 py-2 rounded-xl border text-xs font-semibold transition-all ${
+                micOn 
+                  ? 'bg-slate-800 hover:bg-slate-700 border-slate-700 text-slate-200' 
+                  : 'bg-rose-500/15 border-rose-500/30 text-rose-400 hover:bg-rose-500/25'
+              }`}
             >
               {micOn ? <Mic className="w-4 h-4" /> : <MicOff className="w-4 h-4" />}
+              <span className="hidden sm:inline">{micOn ? 'Mic' : 'Mudo'}</span>
             </button>
+
+            {/* Câmara */}
             <button
               onClick={toggleCamera}
-              className={`p-2.5 rounded-xl border text-xs font-semibold transition-all ${
-                cameraOn 
-                  ? 'bg-slate-800 hover:bg-slate-750 border-slate-700 text-slate-200' 
-                  : 'bg-rose-500/15 border-rose-500/25 text-rose-400 hover:bg-rose-500/25'
-              }`}
               title={cameraOn ? 'Desativar Câmara' : 'Ativar Câmara'}
+              className={`flex items-center gap-1.5 px-3 py-2 rounded-xl border text-xs font-semibold transition-all ${
+                cameraOn 
+                  ? 'bg-slate-800 hover:bg-slate-700 border-slate-700 text-slate-200' 
+                  : 'bg-rose-500/15 border-rose-500/30 text-rose-400 hover:bg-rose-500/25'
+              }`}
             >
               {cameraOn ? <Video className="w-4 h-4" /> : <VideoOff className="w-4 h-4" />}
+              <span className="hidden sm:inline">{cameraOn ? 'Câmara' : 'Câmara Off'}</span>
             </button>
+
+            {/* Partilhar Ecrã */}
             <button
               onClick={toggleScreenShare}
-              className={`p-2.5 rounded-xl border text-xs font-semibold transition-all ${
+              title={sharingScreen ? 'Voltar à Câmara' : 'Partilhar Ecrã'}
+              className={`flex items-center gap-1.5 px-3 py-2 rounded-xl border text-xs font-semibold transition-all ${
                 sharingScreen 
                   ? 'bg-indigo-600 border-indigo-500 text-white' 
-                  : 'bg-slate-800 hover:bg-slate-750 border-slate-700 text-slate-200'
+                  : 'bg-slate-800 hover:bg-slate-700 border-slate-700 text-slate-200'
               }`}
-              title={sharingScreen ? 'Partilhar Câmara' : 'Partilhar Ecrã'}
             >
               <Monitor className="w-4 h-4" />
+              <span className="hidden sm:inline">{sharingScreen ? 'Câmara' : 'Ecrã'}</span>
             </button>
           </div>
 
+          {/* Encerrar */}
           <button
             onClick={cleanupWebRTC}
-            className="px-4 py-2 bg-rose-650 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold shadow flex items-center gap-1.5 transition-colors"
+            className="flex items-center gap-1.5 px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold shadow transition-all"
           >
             <StopCircle className="w-4 h-4" />
             <span>Encerrar Live</span>
@@ -576,3 +876,4 @@ function WebRTCLiveRoom({
     </div>
   )
 }
+
