@@ -113,6 +113,11 @@ function WebRTCLiveRoom({
   const studentMicOnRef = useRef(false)
   const studentLocalStreamRef = useRef<MediaStream | null>(null)
   
+  // Estados para Pedido de Fala (Levantar a Mão)
+  const [handRaises, setHandRaises] = useState<{ id: string, nome: string }[]>([])
+  const [handRaised, setHandRaised] = useState(false)
+  const [micAuthorized, setMicAuthorized] = useState(false)
+  
   // Chat state
   const [messages, setMessages] = useState<any[]>([])
   const [chatOpen, setChatOpen] = useState(false)
@@ -253,6 +258,58 @@ function WebRTCLiveRoom({
       setMessages(prev => [...prev, payload])
       if (!chatOpen) {
         setUnreadCount(c => c + 1)
+      }
+    })
+
+    // Ouvir hand-raise e microfone signals
+    channel.on('broadcast', { event: 'raise-hand' }, ({ payload }) => {
+      const { studentId, nome } = payload
+      if (isProfessor) {
+        setHandRaises(prev => {
+          if (!prev.some(item => item.id === studentId)) {
+            if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
+              try {
+                new Notification('Pedido para Falar ✋', {
+                  body: `${nome} solicitou falar na aula.`,
+                  tag: `raise-hand-${studentId}`
+                })
+              } catch (e) {
+                console.error(e)
+              }
+            }
+            return [...prev, { id: studentId, nome }]
+          }
+          return prev
+        })
+      }
+    })
+
+    channel.on('broadcast', { event: 'lower-hand' }, ({ payload }) => {
+      const { studentId } = payload
+      if (isProfessor) {
+        setHandRaises(prev => prev.filter(item => item.id !== studentId))
+      }
+    })
+
+    channel.on('broadcast', { event: 'permit-mic' }, ({ payload }) => {
+      const { targetId } = payload
+      if (!isProfessor && targetId === user.id) {
+        setMicAuthorized(true)
+        setHandRaised(false)
+      }
+    })
+
+    channel.on('broadcast', { event: 'revoke-mic' }, ({ payload }) => {
+      const { targetId } = payload
+      if (!isProfessor && targetId === user.id) {
+        setMicAuthorized(false)
+        setHandRaised(false)
+        setStudentMicOn(false)
+        studentMicOnRef.current = false
+        if (studentLocalStreamRef.current) {
+          const track = studentLocalStreamRef.current.getAudioTracks()[0]
+          if (track) track.enabled = false
+        }
       }
     })
 
@@ -490,6 +547,38 @@ function WebRTCLiveRoom({
     }
   }
 
+  const raiseHand = () => {
+    if (!channelRef.current) return
+    const nextState = !handRaised
+    setHandRaised(nextState)
+    
+    channelRef.current.send({
+      type: 'broadcast',
+      event: nextState ? 'raise-hand' : 'lower-hand',
+      payload: { studentId: user.id, nome: user.nome }
+    })
+  }
+
+  const handleAuthorizeMic = (studentId: string, authorize: boolean) => {
+    if (!channelRef.current) return
+    
+    setHandRaises(prev => prev.filter(item => item.id !== studentId))
+
+    channelRef.current.send({
+      type: 'broadcast',
+      event: authorize ? 'permit-mic' : 'revoke-mic',
+      payload: { targetId: studentId }
+    })
+  }
+
+  useEffect(() => {
+    if (isProfessor && typeof window !== 'undefined' && 'Notification' in window) {
+      if (Notification.permission === 'default') {
+        Notification.requestPermission()
+      }
+    }
+  }, [isProfessor])
+
   const toggleFullscreen = () => {
     if (!streamAreaRef.current) return
     const anyScreen = screen as any
@@ -661,64 +750,78 @@ function WebRTCLiveRoom({
       return
     }
 
-    if (pcRef.current) {
-      try {
-        pcRef.current.close()
-      } catch (e) {}
-    }
+    const pc = pcRef.current
 
-    const pc = new RTCPeerConnection({
-      iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
-    })
-    pcRef.current = pc
+    // Recria a ligação se não existir, se estiver fechada/falhada, ou se não estiver ativa/estável
+    const shouldRecreate = !pc || 
+      pc.connectionState === 'closed' || 
+      pc.connectionState === 'failed' ||
+      (pc.connectionState !== 'connected' && pc.signalingState !== 'stable')
 
-    pc.onicecandidate = (event) => {
-      if (event.candidate && channelRef.current) {
-        channelRef.current.send({
-          type: 'broadcast',
-          event: 'webrtc-signal',
-          payload: {
-            targetId: professorId,
-            senderId: user.id,
-            type: 'ice-candidate',
-            data: event.candidate
-          }
-        })
+    let activePc: RTCPeerConnection
+
+    if (shouldRecreate) {
+      if (pc) {
+        try {
+          pc.close()
+        } catch (e) {}
       }
-    }
 
-    pc.ontrack = (event) => {
-      setStreamActive(true)
-      updateRemoteTracks()
-      
-      const remoteTrack = event.track
-      if (remoteTrack && remoteTrack.kind === 'audio') {
-        let audioEl = document.getElementById('professor-audio') as HTMLAudioElement
-        if (!audioEl) {
-          audioEl = document.createElement('audio')
-          audioEl.id = 'professor-audio'
-          audioEl.autoplay = true
-          document.body.appendChild(audioEl)
+      activePc = new RTCPeerConnection({
+        iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+      })
+      pcRef.current = activePc
+
+      activePc.onicecandidate = (event) => {
+        if (event.candidate && channelRef.current) {
+          channelRef.current.send({
+            type: 'broadcast',
+            event: 'webrtc-signal',
+            payload: {
+              targetId: professorId,
+              senderId: user.id,
+              type: 'ice-candidate',
+              data: event.candidate
+            }
+          })
         }
-        audioEl.srcObject = new MediaStream([remoteTrack])
-        audioEl.play().catch(e => {
-          console.warn('Autoplay do áudio do professor bloqueado. Registando callback no clique:', e)
-          const resumeAudio = () => {
-            audioEl.play().catch(err => console.error('Erro ao reproduzir áudio do professor:', err))
-            document.removeEventListener('click', resumeAudio)
-            document.removeEventListener('keydown', resumeAudio)
-          }
-          document.addEventListener('click', resumeAudio)
-          document.addEventListener('keydown', resumeAudio)
-        })
       }
-    }
 
-    pc.onconnectionstatechange = () => {
-      if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed' || pc.connectionState === 'closed') {
-        setStreamActive(false)
-        setRemoteTracks([])
+      activePc.ontrack = (event) => {
+        setStreamActive(true)
+        updateRemoteTracks()
+        
+        const remoteTrack = event.track
+        if (remoteTrack && remoteTrack.kind === 'audio') {
+          let audioEl = document.getElementById('professor-audio') as HTMLAudioElement
+          if (!audioEl) {
+            audioEl = document.createElement('audio')
+            audioEl.id = 'professor-audio'
+            audioEl.autoplay = true
+            document.body.appendChild(audioEl)
+          }
+          audioEl.srcObject = new MediaStream([remoteTrack])
+          audioEl.play().catch(e => {
+            console.warn('Autoplay do áudio do professor bloqueado:', e)
+            const resumeAudio = () => {
+              audioEl.play().catch(err => console.error('Erro ao reproduzir áudio do professor:', err))
+              document.removeEventListener('click', resumeAudio)
+              document.removeEventListener('keydown', resumeAudio)
+            }
+            document.addEventListener('click', resumeAudio)
+            document.addEventListener('keydown', resumeAudio)
+          })
+        }
       }
+
+      activePc.onconnectionstatechange = () => {
+        if (activePc.connectionState === 'disconnected' || activePc.connectionState === 'failed' || activePc.connectionState === 'closed') {
+          setStreamActive(false)
+          setRemoteTracks([])
+        }
+      }
+    } else {
+      activePc = pc
     }
 
     // Captura o microfone do aluno para chamada de voz bidirecional (mudo por padrão)
@@ -735,7 +838,7 @@ function WebRTCLiveRoom({
         const micTrack = stream.getAudioTracks()[0]
         if (micTrack) {
           micTrack.enabled = studentMicOnRef.current
-          pc.addTrack(micTrack, stream)
+          activePc.addTrack(micTrack, stream)
         }
       } catch (err) {
         console.warn('Microfone do aluno não disponível ou recusado:', err)
@@ -743,40 +846,44 @@ function WebRTCLiveRoom({
     } else {
       const micTrack = studentLocalStreamRef.current.getAudioTracks()[0]
       if (micTrack) {
-        const senders = pc.getSenders()
+        const senders = activePc.getSenders()
         const hasTrack = senders.some(s => s.track === micTrack)
         if (!hasTrack) {
-          pc.addTrack(micTrack, studentLocalStreamRef.current)
+          activePc.addTrack(micTrack, studentLocalStreamRef.current)
         }
       }
     }
 
-    await pc.setRemoteDescription(new RTCSessionDescription(offer))
-    
-    const queue = studentQueuedCandidatesRef.current
-    while (queue.length > 0) {
-      const candidate = queue.shift()
-      if (candidate) {
-        await pc.addIceCandidate(new RTCIceCandidate(candidate)).catch(e => console.error('Erro ao adicionar candidato ICE da fila (aluno):', e))
-      }
-    }
-
-    const answer = await pc.createAnswer()
-    await pc.setLocalDescription(answer)
-
-    updateRemoteTracks()
-
-    if (channelRef.current) {
-      channelRef.current.send({
-        type: 'broadcast',
-        event: 'webrtc-signal',
-        payload: {
-          targetId: professorId,
-          senderId: user.id,
-          type: 'answer',
-          data: answer
+    try {
+      await activePc.setRemoteDescription(new RTCSessionDescription(offer))
+      
+      const queue = studentQueuedCandidatesRef.current
+      while (queue.length > 0) {
+        const candidate = queue.shift()
+        if (candidate) {
+          await activePc.addIceCandidate(new RTCIceCandidate(candidate)).catch(e => console.error('Erro ao adicionar candidato ICE da fila (aluno):', e))
         }
-      })
+      }
+
+      const answer = await activePc.createAnswer()
+      await activePc.setLocalDescription(answer)
+
+      updateRemoteTracks()
+
+      if (channelRef.current) {
+        channelRef.current.send({
+          type: 'broadcast',
+          event: 'webrtc-signal',
+          payload: {
+            targetId: professorId,
+            senderId: user.id,
+            type: 'answer',
+            data: answer
+          }
+        })
+      }
+    } catch (err) {
+      console.error('Erro ao processar oferta no aluno:', err)
     }
   }
 
@@ -1010,6 +1117,71 @@ function WebRTCLiveRoom({
               </button>
             </div>
           )}
+
+          {/* Alertas de Mão Levantada para o Professor */}
+          {isProfessor && handRaises.length > 0 && (
+            <div className="absolute top-16 left-4 right-4 z-20 space-y-2 max-w-sm pointer-events-auto">
+              {handRaises.map(raiser => (
+                <div key={raiser.id} className="flex items-center justify-between gap-3 p-3 bg-slate-900/95 border border-amber-500/35 rounded-xl shadow-2xl backdrop-blur-sm animate-fade-in">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xl">✋</span>
+                    <div>
+                      <p className="text-xs font-semibold text-slate-200">{raiser.nome}</p>
+                      <p className="text-[10px] text-slate-400">Pede palavra para falar</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <button
+                      onClick={() => handleAuthorizeMic(raiser.id, true)}
+                      className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-[10px] font-bold transition-all"
+                    >
+                      Autorizar
+                    </button>
+                    <button
+                      onClick={() => handleAuthorizeMic(raiser.id, false)}
+                      className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white rounded-lg text-[10px] font-bold transition-all"
+                    >
+                      Ignorar
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Banner de Autorização para o Aluno */}
+          {!isProfessor && micAuthorized && (
+            <div className="absolute top-16 left-4 right-4 z-20 max-w-sm p-3 bg-emerald-950/90 border border-emerald-500/40 rounded-xl shadow-2xl backdrop-blur-sm flex items-center justify-between gap-3 pointer-events-auto">
+              <div className="flex items-center gap-2">
+                <span className="text-emerald-400 text-base">🎙️</span>
+                <div>
+                  <p className="text-xs font-semibold text-emerald-250">Microfone Autorizado</p>
+                  <p className="text-[10px] text-emerald-400/90">Ative o microfone abaixo para falar.</p>
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  setMicAuthorized(false);
+                  setStudentMicOn(false);
+                  studentMicOnRef.current = false;
+                  if (studentLocalStreamRef.current) {
+                    const track = studentLocalStreamRef.current.getAudioTracks()[0];
+                    if (track) track.enabled = false;
+                  }
+                  if (channelRef.current) {
+                    channelRef.current.send({
+                      type: 'broadcast',
+                      event: 'lower-hand',
+                      payload: { studentId: user.id }
+                    });
+                  }
+                }}
+                className="px-2 py-1 bg-emerald-900/60 hover:bg-emerald-900 text-emerald-300 rounded-lg text-[10px] font-bold transition-all shrink-0"
+              >
+                Terminar
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Chat Sidebar */}
@@ -1131,24 +1303,41 @@ function WebRTCLiveRoom({
         </div>
       )}
 
-      {/* Barra de Controles do Aluno (Chamada de Voz Bidirecional) */}
+      {/* Barra de Controles do Aluno (Chamada de Voz Bidirecional / Pedir Palavra) */}
       {!isProfessor && streamActive && (
         <div className="shrink-0 px-4 py-3 bg-[#0c1220] border-t border-slate-800 flex items-center justify-between gap-3 animate-fade-in">
           <div className="flex items-center gap-2">
-            <button
-              onClick={toggleStudentMic}
-              title={studentMicOn ? 'Silenciar Microfone' : 'Ativar Microfone para Falar'}
-              className={`flex items-center gap-1.5 px-3 py-2 rounded-xl border text-xs font-semibold transition-all ${
-                studentMicOn 
-                  ? 'bg-emerald-600/20 border-emerald-500/35 text-emerald-450 hover:bg-emerald-600/30' 
-                  : 'bg-rose-500/15 border-rose-500/30 text-rose-450 hover:bg-rose-500/25'
-              }`}
-            >
-              {studentMicOn ? <Mic className="w-4 h-4" /> : <MicOff className="w-4 h-4" />}
-              <span>{studentMicOn ? 'Microfone Ativo' : 'Pedir Palavra (Mudo)'}</span>
-            </button>
+            {micAuthorized ? (
+              <button
+                onClick={toggleStudentMic}
+                title={studentMicOn ? 'Silenciar Microfone' : 'Ativar Microfone para Falar'}
+                className={`flex items-center gap-1.5 px-3 py-2 rounded-xl border text-xs font-semibold transition-all ${
+                  studentMicOn 
+                    ? 'bg-emerald-600/20 border-emerald-500/35 text-emerald-400 hover:bg-emerald-600/30' 
+                    : 'bg-rose-500/15 border-rose-500/30 text-rose-400 hover:bg-rose-500/25'
+                }`}
+              >
+                {studentMicOn ? <Mic className="w-4 h-4" /> : <MicOff className="w-4 h-4" />}
+                <span>{studentMicOn ? 'Falar (Microfone Ligado)' : 'Ativar Microfone'}</span>
+              </button>
+            ) : (
+              <button
+                onClick={raiseHand}
+                title={handRaised ? 'Baixar a Mão' : 'Pedir para Falar'}
+                className={`flex items-center gap-1.5 px-3 py-2 rounded-xl border text-xs font-semibold transition-all ${
+                  handRaised 
+                    ? 'bg-amber-500/20 border-amber-500/35 text-amber-400 hover:bg-amber-500/30' 
+                    : 'bg-slate-800 border-slate-700 text-slate-350 hover:bg-slate-750 hover:text-white'
+                }`}
+              >
+                <span className="text-sm">✋</span>
+                <span>{handRaised ? 'Aguardando Professor (Baixar Mão)' : 'Pedir para Falar'}</span>
+              </button>
+            )}
           </div>
-          <span className="text-[10px] text-slate-500 font-medium">Chamada de voz activa</span>
+          <span className="text-[10px] text-slate-500 font-medium">
+            {micAuthorized ? 'Você tem permissão de fala' : 'Chamada de voz ativa (mudo)'}
+          </span>
         </div>
       )}
     </div>
