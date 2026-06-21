@@ -337,6 +337,9 @@ function WebRTCLiveRoom({
       pcRef.current = null
     }
     
+    const profAudioEl = document.getElementById('professor-audio')
+    if (profAudioEl) profAudioEl.remove()
+    
     setStreamActive(false)
     setSharingScreen(false)
     setRemoteTracks([])
@@ -448,6 +451,9 @@ function WebRTCLiveRoom({
   const handleAnswer = async (studentId: string, answer: RTCSessionDescriptionInit) => {
     const pc = pcsRef.current[studentId]
     if (pc) {
+      if (pc.signalingState === 'stable' || (pc.remoteDescription && pc.remoteDescription.sdp === answer.sdp)) {
+        return
+      }
       await pc.setRemoteDescription(new RTCSessionDescription(answer))
       const queue = professorQueuedCandidatesRef.current[studentId]
       if (queue) {
@@ -486,20 +492,38 @@ function WebRTCLiveRoom({
 
   const toggleFullscreen = () => {
     if (!streamAreaRef.current) return
+    const anyScreen = screen as any
     if (!document.fullscreenElement) {
       streamAreaRef.current.requestFullscreen()
-        .then(() => setIsFullscreen(true))
+        .then(() => {
+          setIsFullscreen(true)
+          if (anyScreen.orientation && typeof anyScreen.orientation.lock === 'function') {
+            anyScreen.orientation.lock('landscape').catch((err: any) => {
+              console.warn('Bloqueio de orientação horizontal não suportado:', err)
+            })
+          }
+        })
         .catch(err => console.error('Erro ao activar ecrã inteiro:', err))
     } else {
       document.exitFullscreen()
-        .then(() => setIsFullscreen(false))
+        .then(() => {
+          setIsFullscreen(false)
+          if (anyScreen.orientation && typeof anyScreen.orientation.unlock === 'function') {
+            anyScreen.orientation.unlock()
+          }
+        })
         .catch(err => console.error('Erro ao sair do ecrã inteiro:', err))
     }
   }
 
   useEffect(() => {
     const handleFullscreenChange = () => {
-      setIsFullscreen(!!document.fullscreenElement)
+      const active = !!document.fullscreenElement
+      setIsFullscreen(active)
+      const anyScreen = screen as any
+      if (!active && anyScreen.orientation && typeof anyScreen.orientation.unlock === 'function') {
+        anyScreen.orientation.unlock()
+      }
     }
     document.addEventListener('fullscreenchange', handleFullscreenChange)
     return () => document.removeEventListener('fullscreenchange', handleFullscreenChange)
@@ -633,40 +657,67 @@ function WebRTCLiveRoom({
   // LOGICA DO ESTUDANTE (Viewer)
   // ==========================================
   const handleOffer = async (professorId: string, offer: RTCSessionDescriptionInit) => {
-    let pc = pcRef.current
-    if (!pc || pc.connectionState === 'closed') {
-      pc = new RTCPeerConnection({
-        iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
-      })
-      pcRef.current = pc
+    if (pcRef.current && pcRef.current.remoteDescription && pcRef.current.remoteDescription.sdp === offer.sdp) {
+      return
+    }
 
-      pc.onicecandidate = (event) => {
-        if (event.candidate && channelRef.current) {
-          channelRef.current.send({
-            type: 'broadcast',
-            event: 'webrtc-signal',
-            payload: {
-              targetId: professorId,
-              senderId: user.id,
-              type: 'ice-candidate',
-              data: event.candidate
-            }
-          })
-        }
+    if (pcRef.current) {
+      try {
+        pcRef.current.close()
+      } catch (e) {}
+    }
+
+    const pc = new RTCPeerConnection({
+      iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+    })
+    pcRef.current = pc
+
+    pc.onicecandidate = (event) => {
+      if (event.candidate && channelRef.current) {
+        channelRef.current.send({
+          type: 'broadcast',
+          event: 'webrtc-signal',
+          payload: {
+            targetId: professorId,
+            senderId: user.id,
+            type: 'ice-candidate',
+            data: event.candidate
+          }
+        })
       }
+    }
 
-      const currentPc = pc;
-
-      currentPc.ontrack = () => {
-        setStreamActive(true)
-        updateRemoteTracks()
-      }
-
-      currentPc.onconnectionstatechange = () => {
-        if (currentPc.connectionState === 'disconnected' || currentPc.connectionState === 'failed' || currentPc.connectionState === 'closed') {
-          setStreamActive(false)
-          setRemoteTracks([])
+    pc.ontrack = (event) => {
+      setStreamActive(true)
+      updateRemoteTracks()
+      
+      const remoteTrack = event.track
+      if (remoteTrack && remoteTrack.kind === 'audio') {
+        let audioEl = document.getElementById('professor-audio') as HTMLAudioElement
+        if (!audioEl) {
+          audioEl = document.createElement('audio')
+          audioEl.id = 'professor-audio'
+          audioEl.autoplay = true
+          document.body.appendChild(audioEl)
         }
+        audioEl.srcObject = new MediaStream([remoteTrack])
+        audioEl.play().catch(e => {
+          console.warn('Autoplay do áudio do professor bloqueado. Registando callback no clique:', e)
+          const resumeAudio = () => {
+            audioEl.play().catch(err => console.error('Erro ao reproduzir áudio do professor:', err))
+            document.removeEventListener('click', resumeAudio)
+            document.removeEventListener('keydown', resumeAudio)
+          }
+          document.addEventListener('click', resumeAudio)
+          document.addEventListener('keydown', resumeAudio)
+        })
+      }
+    }
+
+    pc.onconnectionstatechange = () => {
+      if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed' || pc.connectionState === 'closed') {
+        setStreamActive(false)
+        setRemoteTracks([])
       }
     }
 
@@ -739,11 +790,7 @@ function WebRTCLiveRoom({
       return
     }
 
-    // Get remote audio track from receivers to support class audio
-    const audioTrack = pcRef.current?.getReceivers()
-      .find(r => r.track && r.track.kind === 'audio')?.track
-
-    const playStream = (videoEl: HTMLVideoElement, videoTrack: MediaStreamTrack, includeAudio: boolean) => {
+    const playStream = (videoEl: HTMLVideoElement, videoTrack: MediaStreamTrack) => {
       const currentStream = videoEl.srcObject as MediaStream | null
       const hasVideoTrack = currentStream && currentStream.getVideoTracks().includes(videoTrack)
       
@@ -754,11 +801,7 @@ function WebRTCLiveRoom({
         return
       }
 
-      const tracks = [videoTrack]
-      if (includeAudio && audioTrack) {
-        tracks.push(audioTrack)
-      }
-      const stream = new MediaStream(tracks)
+      const stream = new MediaStream([videoTrack])
       videoEl.srcObject = stream
       
       // Auto-play handling browser permission blocks
@@ -775,20 +818,18 @@ function WebRTCLiveRoom({
     }
 
     if (remoteTracks.length === 1) {
-      // Apenas Camera (com áudio)
+      // Apenas Camera
       if (remoteVideoRef.current) {
-        playStream(remoteVideoRef.current, remoteTracks[0], true)
+        playStream(remoteVideoRef.current, remoteTracks[0])
       }
       if (pipVideoRef.current) pipVideoRef.current.srcObject = null
     } else {
       // Ecrã + Camera
-      // O ecrã fica no player principal (com áudio do professor)
       if (remoteVideoRef.current) {
-        playStream(remoteVideoRef.current, remoteTracks[1], true)
+        playStream(remoteVideoRef.current, remoteTracks[1])
       }
-      // A câmara fica no player flutuante (sem necessidade de duplicar áudio)
       if (pipVideoRef.current) {
-        playStream(pipVideoRef.current, remoteTracks[0], false)
+        playStream(pipVideoRef.current, remoteTracks[0])
       }
     }
   }, [remoteTracks, isProfessor])
