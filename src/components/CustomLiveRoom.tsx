@@ -128,6 +128,10 @@ function WebRTCLiveRoom({
   // Estudante guarda conexão com o Professor
   const pcRef = useRef<RTCPeerConnection | null>(null)
   
+  // Filas para guardar candidatos ICE recebidos antes do remoteDescription estar definido
+  const studentQueuedCandidatesRef = useRef<RTCIceCandidateInit[]>([])
+  const professorQueuedCandidatesRef = useRef<{ [key: string]: RTCIceCandidateInit[] }>({})
+  
   // Canal Supabase Realtime
   const channelRef = useRef<any>(null)
   const supabase = isSupabaseConfigured() ? createClient() : null
@@ -207,8 +211,19 @@ function WebRTCLiveRoom({
         } else if (type === 'ice-candidate') {
           // Ambos recebem candidatos ICE
           const pc = isProfessor ? pcsRef.current[senderId] : pcRef.current
-          if (pc && pc.remoteDescription) {
-            await pc.addIceCandidate(new RTCIceCandidate(data))
+          if (pc) {
+            if (pc.remoteDescription) {
+              await pc.addIceCandidate(new RTCIceCandidate(data)).catch(e => console.error('Erro ao adicionar candidato ICE:', e))
+            } else {
+              if (isProfessor) {
+                if (!professorQueuedCandidatesRef.current[senderId]) {
+                  professorQueuedCandidatesRef.current[senderId] = []
+                }
+                professorQueuedCandidatesRef.current[senderId].push(data)
+              } else {
+                studentQueuedCandidatesRef.current.push(data)
+              }
+            }
           }
         }
       } catch (err) {
@@ -400,6 +415,15 @@ function WebRTCLiveRoom({
     const pc = pcsRef.current[studentId]
     if (pc) {
       await pc.setRemoteDescription(new RTCSessionDescription(answer))
+      const queue = professorQueuedCandidatesRef.current[studentId]
+      if (queue) {
+        while (queue.length > 0) {
+          const candidate = queue.shift()
+          if (candidate) {
+            await pc.addIceCandidate(new RTCIceCandidate(candidate)).catch(e => console.error('Erro ao adicionar candidato ICE da fila:', e))
+          }
+        }
+      }
     }
   }
 
@@ -579,6 +603,15 @@ function WebRTCLiveRoom({
     }
 
     await pc.setRemoteDescription(new RTCSessionDescription(offer))
+    
+    const queue = studentQueuedCandidatesRef.current
+    while (queue.length > 0) {
+      const candidate = queue.shift()
+      if (candidate) {
+        await pc.addIceCandidate(new RTCIceCandidate(candidate)).catch(e => console.error('Erro ao adicionar candidato ICE da fila (aluno):', e))
+      }
+    }
+
     const answer = await pc.createAnswer()
     await pc.setLocalDescription(answer)
 
@@ -608,19 +641,46 @@ function WebRTCLiveRoom({
       return
     }
 
+    // Get remote audio track from receivers to support class audio
+    const audioTrack = pcRef.current?.getReceivers()
+      .find(r => r.track && r.track.kind === 'audio')?.track
+
+    const playStream = (videoEl: HTMLVideoElement, videoTrack: MediaStreamTrack, includeAudio: boolean) => {
+      const tracks = [videoTrack]
+      if (includeAudio && audioTrack) {
+        tracks.push(audioTrack)
+      }
+      const stream = new MediaStream(tracks)
+      videoEl.srcObject = stream
+      
+      // Auto-play handling browser permission blocks
+      videoEl.play().catch(err => {
+        console.warn('Autoplay bloqueado. Registando callback de recuperação no clique do utilizador:', err)
+        const resumePlayback = () => {
+          videoEl.play().catch(e => console.error('Erro ao resumir vídeo:', e))
+          document.removeEventListener('click', resumePlayback)
+          document.removeEventListener('keydown', resumePlayback)
+        }
+        document.addEventListener('click', resumePlayback)
+        document.addEventListener('keydown', resumePlayback)
+      })
+    }
+
     if (remoteTracks.length === 1) {
-      // Apenas Camera
+      // Apenas Camera (com áudio)
       if (remoteVideoRef.current) {
-        remoteVideoRef.current.srcObject = new MediaStream([remoteTracks[0]])
+        playStream(remoteVideoRef.current, remoteTracks[0], true)
       }
       if (pipVideoRef.current) pipVideoRef.current.srcObject = null
     } else {
       // Ecrã + Camera
+      // O ecrã fica no player principal (com áudio do professor)
       if (remoteVideoRef.current) {
-        remoteVideoRef.current.srcObject = new MediaStream([remoteTracks[1]])
+        playStream(remoteVideoRef.current, remoteTracks[1], true)
       }
+      // A câmara fica no player flutuante (sem necessidade de duplicar áudio)
       if (pipVideoRef.current) {
-        pipVideoRef.current.srcObject = new MediaStream([remoteTracks[0]])
+        playStream(pipVideoRef.current, remoteTracks[0], false)
       }
     }
   }, [remoteTracks, isProfessor])

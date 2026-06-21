@@ -189,7 +189,7 @@ export default function ClassroomPage() {
     const now = new Date().getTime()
     
     // Mostra o player se faltar 15 min ou se já tiver começado
-    return now >= (liveTime - 15 * 60 * 1000) && now <= (liveTime + 3 * 60 * 60 * 1000)
+    return now >= (liveTime - 15 * 60 * 1000)
   }
 
   if (authLoading || loading) {
