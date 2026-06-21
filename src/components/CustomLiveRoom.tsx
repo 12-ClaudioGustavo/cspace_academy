@@ -459,7 +459,18 @@ function WebRTCLiveRoom({
           document.body.appendChild(audioEl)
         }
         audioEl.srcObject = new MediaStream([remoteTrack])
-        audioEl.play().catch(e => console.error('Erro ao reproduzir áudio do aluno:', e))
+        audioEl.volume = 1.0
+        audioEl.muted = false
+        audioEl.play().catch(e => {
+          console.warn('Autoplay do áudio do aluno bloqueado. Registando callback no clique:', e)
+          const resumeAudio = () => {
+            audioEl.play().catch(err => console.error('Erro ao reproduzir áudio do aluno:', err))
+            document.removeEventListener('click', resumeAudio)
+            document.removeEventListener('keydown', resumeAudio)
+          }
+          document.addEventListener('click', resumeAudio)
+          document.addEventListener('keydown', resumeAudio)
+        })
       }
     }
 
@@ -544,15 +555,47 @@ function WebRTCLiveRoom({
     }
   }
 
-  const toggleStudentMic = () => {
+  const toggleStudentMic = async () => {
     const nextState = !studentMicOn
-    setStudentMicOn(nextState)
-    studentMicOnRef.current = nextState
     
-    if (studentLocalStreamRef.current) {
-      const audioTrack = studentLocalStreamRef.current.getAudioTracks()[0]
-      if (audioTrack) {
-        audioTrack.enabled = nextState
+    if (!studentLocalStreamRef.current) {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true
+          }
+        })
+        studentLocalStreamRef.current = stream
+      } catch (err) {
+        console.error('Erro ao capturar microfone do aluno:', err)
+        alert('Não foi possível aceder ao microfone. Por favor, dê permissão no seu navegador.')
+        return
+      }
+    }
+
+    const audioTrack = studentLocalStreamRef.current?.getAudioTracks()[0]
+    if (audioTrack) {
+      audioTrack.enabled = nextState
+      setStudentMicOn(nextState)
+      studentMicOnRef.current = nextState
+
+      const pc = pcRef.current
+      if (pc) {
+        const senders = pc.getSenders()
+        const hasTrack = senders.some(s => s.track === audioTrack)
+        if (!hasTrack) {
+          pc.addTrack(audioTrack, studentLocalStreamRef.current)
+          
+          if (channelRef.current) {
+            channelRef.current.send({
+              type: 'broadcast',
+              event: 'webrtc-request-offer',
+              payload: { senderId: user.id }
+            })
+          }
+        }
       }
     }
   }
