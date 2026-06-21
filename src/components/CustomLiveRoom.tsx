@@ -108,6 +108,11 @@ function WebRTCLiveRoom({
   // Remote Tracks state for student
   const [remoteTracks, setRemoteTracks] = useState<MediaStreamTrack[]>([])
   
+  // Controle do Microfone do Aluno (Chamada de Voz Bidirecional)
+  const [studentMicOn, setStudentMicOn] = useState(false)
+  const studentMicOnRef = useRef(false)
+  const studentLocalStreamRef = useRef<MediaStream | null>(null)
+  
   // Chat state
   const [messages, setMessages] = useState<any[]>([])
   const [chatOpen, setChatOpen] = useState(false)
@@ -308,9 +313,17 @@ function WebRTCLiveRoom({
       screenStreamRef.current.getTracks().forEach(t => t.stop())
       screenStreamRef.current = null
     }
+    if (studentLocalStreamRef.current) {
+      studentLocalStreamRef.current.getTracks().forEach(t => t.stop())
+      studentLocalStreamRef.current = null
+    }
     
-    // Fecha conexões do Professor
-    Object.values(pcsRef.current).forEach(pc => pc.close())
+    // Fecha conexões do Professor e remove elementos de áudio
+    Object.keys(pcsRef.current).forEach(studentId => {
+      pcsRef.current[studentId].close()
+      const audioEl = document.getElementById(`audio-student-${studentId}`)
+      if (audioEl) audioEl.remove()
+    })
     pcsRef.current = {}
     
     // Fecha conexão do Estudante
@@ -368,6 +381,22 @@ function WebRTCLiveRoom({
 
     // Adiciona tracks locais de camera e áudio
     stream.getTracks().forEach(track => pc.addTrack(track, stream))
+
+    // Escuta áudio do aluno (chamada de voz bidirecional)
+    pc.ontrack = (event) => {
+      const remoteTrack = event.track
+      if (remoteTrack && remoteTrack.kind === 'audio') {
+        let audioEl = document.getElementById(`audio-student-${studentId}`) as HTMLAudioElement
+        if (!audioEl) {
+          audioEl = document.createElement('audio')
+          audioEl.id = `audio-student-${studentId}`
+          audioEl.autoplay = true
+          document.body.appendChild(audioEl)
+        }
+        audioEl.srcObject = new MediaStream([remoteTrack])
+        audioEl.play().catch(e => console.error('Erro ao reproduzir áudio do aluno:', e))
+      }
+    }
 
     // Se estiver a partilhar ecrã, adiciona também a track do ecrã
     if (sharingScreenRef.current && screenStreamRef.current) {
@@ -433,6 +462,19 @@ function WebRTCLiveRoom({
       if (audioTrack) {
         audioTrack.enabled = !micOn
         setMicOn(!micOn)
+      }
+    }
+  }
+
+  const toggleStudentMic = () => {
+    const nextState = !studentMicOn
+    setStudentMicOn(nextState)
+    studentMicOnRef.current = nextState
+    
+    if (studentLocalStreamRef.current) {
+      const audioTrack = studentLocalStreamRef.current.getAudioTracks()[0]
+      if (audioTrack) {
+        audioTrack.enabled = nextState
       }
     }
   }
@@ -602,6 +644,36 @@ function WebRTCLiveRoom({
       }
     }
 
+    // Captura o microfone do aluno para chamada de voz bidirecional (mudo por padrão)
+    if (!studentLocalStreamRef.current) {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true
+          }
+        })
+        studentLocalStreamRef.current = stream
+        const micTrack = stream.getAudioTracks()[0]
+        if (micTrack) {
+          micTrack.enabled = studentMicOnRef.current
+          pc.addTrack(micTrack, stream)
+        }
+      } catch (err) {
+        console.warn('Microfone do aluno não disponível ou recusado:', err)
+      }
+    } else {
+      const micTrack = studentLocalStreamRef.current.getAudioTracks()[0]
+      if (micTrack) {
+        const senders = pc.getSenders()
+        const hasTrack = senders.some(s => s.track === micTrack)
+        if (!hasTrack) {
+          pc.addTrack(micTrack, studentLocalStreamRef.current)
+        }
+      }
+    }
+
     await pc.setRemoteDescription(new RTCSessionDescription(offer))
     
     const queue = studentQueuedCandidatesRef.current
@@ -646,6 +718,16 @@ function WebRTCLiveRoom({
       .find(r => r.track && r.track.kind === 'audio')?.track
 
     const playStream = (videoEl: HTMLVideoElement, videoTrack: MediaStreamTrack, includeAudio: boolean) => {
+      const currentStream = videoEl.srcObject as MediaStream | null
+      const hasVideoTrack = currentStream && currentStream.getVideoTracks().includes(videoTrack)
+      
+      if (hasVideoTrack) {
+        if (videoEl.paused) {
+          videoEl.play().catch(() => {})
+        }
+        return
+      }
+
       const tracks = [videoTrack]
       if (includeAudio && audioTrack) {
         tracks.push(audioTrack)
@@ -906,8 +988,8 @@ function WebRTCLiveRoom({
 
       {/* Barra de Controles do Professor */}
       {isProfessor && streamActive && (
-        <div className="shrink-0 px-4 py-3 bg-[#0c1220] border-t border-slate-800 flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2">
+        <div className="shrink-0 px-4 py-3 bg-[#0c1220] border-t border-slate-800 flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-wrap items-center gap-2">
             {/* Microfone */}
             <button
               onClick={toggleMic}
@@ -959,6 +1041,27 @@ function WebRTCLiveRoom({
             <StopCircle className="w-4 h-4" />
             <span>Encerrar Live</span>
           </button>
+        </div>
+      )}
+
+      {/* Barra de Controles do Aluno (Chamada de Voz Bidirecional) */}
+      {!isProfessor && streamActive && (
+        <div className="shrink-0 px-4 py-3 bg-[#0c1220] border-t border-slate-800 flex items-center justify-between gap-3 animate-fade-in">
+          <div className="flex items-center gap-2">
+            <button
+              onClick={toggleStudentMic}
+              title={studentMicOn ? 'Silenciar Microfone' : 'Ativar Microfone para Falar'}
+              className={`flex items-center gap-1.5 px-3 py-2 rounded-xl border text-xs font-semibold transition-all ${
+                studentMicOn 
+                  ? 'bg-emerald-600/20 border-emerald-500/35 text-emerald-450 hover:bg-emerald-600/30' 
+                  : 'bg-rose-500/15 border-rose-500/30 text-rose-450 hover:bg-rose-500/25'
+              }`}
+            >
+              {studentMicOn ? <Mic className="w-4 h-4" /> : <MicOff className="w-4 h-4" />}
+              <span>{studentMicOn ? 'Microfone Ativo' : 'Pedir Palavra (Mudo)'}</span>
+            </button>
+          </div>
+          <span className="text-[10px] text-slate-500 font-medium">Chamada de voz activa</span>
         </div>
       )}
     </div>
