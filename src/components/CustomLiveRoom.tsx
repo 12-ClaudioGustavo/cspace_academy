@@ -511,13 +511,23 @@ function WebRTCLiveRoom({
       if (pc.signalingState === 'stable' || (pc.remoteDescription && pc.remoteDescription.sdp === answer.sdp)) {
         return
       }
-      await pc.setRemoteDescription(new RTCSessionDescription(answer))
-      const queue = professorQueuedCandidatesRef.current[studentId]
-      if (queue) {
-        while (queue.length > 0) {
-          const candidate = queue.shift()
-          if (candidate) {
-            await pc.addIceCandidate(new RTCIceCandidate(candidate)).catch(e => console.error('Erro ao adicionar candidato ICE da fila:', e))
+      try {
+        await pc.setRemoteDescription(new RTCSessionDescription(answer))
+        const queue = professorQueuedCandidatesRef.current[studentId]
+        if (queue) {
+          while (queue.length > 0) {
+            const candidate = queue.shift()
+            if (candidate) {
+              await pc.addIceCandidate(new RTCIceCandidate(candidate)).catch(e => console.error('Erro ao adicionar candidato ICE da fila:', e))
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('Erro ao aplicar setRemoteDescription no professor, reiniciando ligação para o aluno:', studentId, err)
+        if (streamActiveRef.current) {
+          const activeStream = screenStreamRef.current || localStreamRef.current
+          if (activeStream) {
+            initiateConnectionToStudent(studentId, activeStream)
           }
         }
       }
@@ -883,7 +893,19 @@ function WebRTCLiveRoom({
         })
       }
     } catch (err) {
-      console.error('Erro ao processar oferta no aluno:', err)
+      console.warn('Erro ao processar oferta no aluno, solicitando nova ligação:', err)
+      try {
+        activePc.close()
+      } catch (e) {}
+      pcRef.current = null
+      
+      if (channelRef.current) {
+        channelRef.current.send({
+          type: 'broadcast',
+          event: 'webrtc-request-offer',
+          payload: { senderId: user.id }
+        })
+      }
     }
   }
 
