@@ -6,7 +6,7 @@ import { createClient } from '@/lib/supabase/client'
 import { 
   Video, VideoOff, Mic, MicOff, Monitor, StopCircle, 
   Play, Users, Shield, AlertCircle, RefreshCw, ExternalLink,
-  MessageSquare, Send, X 
+  MessageSquare, Send, X, Maximize, Minimize, Maximize2, Minimize2
 } from 'lucide-react'
 
 interface CustomLiveRoomProps {
@@ -119,9 +119,14 @@ function WebRTCLiveRoom({
   const [chatInput, setChatInput] = useState('')
   const [unreadCount, setUnreadCount] = useState(0)
   
+  // Ecrã Inteiro e Redimensionamento
+  const [videoFit, setVideoFit] = useState<'cover' | 'contain'>('contain')
+  const [isFullscreen, setIsFullscreen] = useState(false)
+  
   const localVideoRef = useRef<HTMLVideoElement>(null)
   const remoteVideoRef = useRef<HTMLVideoElement>(null)
   const pipVideoRef = useRef<HTMLVideoElement>(null)
+  const streamAreaRef = useRef<HTMLDivElement>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   
   const localStreamRef = useRef<MediaStream | null>(null)
@@ -478,6 +483,27 @@ function WebRTCLiveRoom({
       }
     }
   }
+
+  const toggleFullscreen = () => {
+    if (!streamAreaRef.current) return
+    if (!document.fullscreenElement) {
+      streamAreaRef.current.requestFullscreen()
+        .then(() => setIsFullscreen(true))
+        .catch(err => console.error('Erro ao activar ecrã inteiro:', err))
+    } else {
+      document.exitFullscreen()
+        .then(() => setIsFullscreen(false))
+        .catch(err => console.error('Erro ao sair do ecrã inteiro:', err))
+    }
+  }
+
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsFullscreen(!!document.fullscreenElement)
+    }
+    document.addEventListener('fullscreenchange', handleFullscreenChange)
+    return () => document.removeEventListener('fullscreenchange', handleFullscreenChange)
+  }, [])
 
   const toggleCamera = () => {
     if (localStreamRef.current) {
@@ -840,7 +866,7 @@ function WebRTCLiveRoom({
       <div className="flex-1 flex flex-col md:flex-row min-h-0 relative">
         
         {/* Stream Area */}
-        <div className="flex-1 relative flex items-center justify-center bg-[#070b13] min-h-[300px]">
+        <div ref={streamAreaRef} className="flex-1 relative flex items-center justify-center bg-[#070b13] min-h-[300px]">
           {isProfessor ? (
             streamActive ? (
               <video
@@ -848,7 +874,7 @@ function WebRTCLiveRoom({
                 autoPlay
                 playsInline
                 muted
-                className="absolute inset-0 w-full h-full object-cover scale-x-[-1]"
+                className={`absolute inset-0 w-full h-full ${videoFit === 'cover' ? 'object-cover' : 'object-contain'} scale-x-[-1]`}
               />
             ) : (
               <div className="text-center p-6 space-y-5 max-w-sm">
@@ -876,7 +902,7 @@ function WebRTCLiveRoom({
                 ref={remoteVideoRef}
                 autoPlay
                 playsInline
-                className="absolute inset-0 w-full h-full object-cover"
+                className={`absolute inset-0 w-full h-full ${videoFit === 'cover' ? 'object-cover' : 'object-contain'}`}
               />
             ) : (
               <div className="text-center p-6 space-y-3">
@@ -891,6 +917,26 @@ function WebRTCLiveRoom({
                 </div>
               </div>
             )
+          )}
+
+          {/* Floating Controls Overlay */}
+          {streamActive && (
+            <div className="absolute top-4 right-4 z-20 flex items-center gap-2">
+              <button
+                onClick={() => setVideoFit(prev => prev === 'cover' ? 'contain' : 'cover')}
+                title={videoFit === 'cover' ? 'Ajustar vídeo à tela' : 'Preencher tela inteira'}
+                className="p-2 bg-slate-900/80 hover:bg-slate-800/90 text-slate-200 hover:text-white border border-slate-700/50 rounded-xl transition-all shadow-lg backdrop-blur-sm"
+              >
+                {videoFit === 'cover' ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
+              </button>
+              <button
+                onClick={toggleFullscreen}
+                title={isFullscreen ? 'Sair do Ecrã Inteiro' : 'Ecrã Inteiro'}
+                className="p-2 bg-slate-900/80 hover:bg-slate-800/90 text-slate-200 hover:text-white border border-slate-700/50 rounded-xl transition-all shadow-lg backdrop-blur-sm"
+              >
+                {isFullscreen ? <Minimize className="w-4 h-4" /> : <Maximize className="w-4 h-4" />}
+              </button>
+            </div>
           )}
 
           {/* Floating PIP Video overlay */}
