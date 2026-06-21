@@ -53,6 +53,7 @@ export default function RegisterPage() {
         email,
         password,
         options: {
+          emailRedirectTo: 'https://cspace-academy.vercel.app/',
           data: {
             nome: nome,
             role: 'aluno' // Cadastrado por padrão como aluno
