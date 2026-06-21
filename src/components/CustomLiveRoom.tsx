@@ -93,7 +93,7 @@ function ExternalStreamPlayer({ url }: { url: string }) {
 
 // ==========================================
 // 2. SALA WEBRTC IN-HOUSE (P2P + Supabase)
-// ========================================
+// ======================================
 function WebRTCLiveRoom({ 
   roomName, user, isProfessor 
 }: { roomName: string, user: Perfil, isProfessor: boolean }) {
@@ -125,8 +125,6 @@ function WebRTCLiveRoom({
   // Conexões WebRTC
   // Professor guarda conexão para cada estudante: { [studentId]: RTCPeerConnection }
   const pcsRef = useRef<{ [key: string]: RTCPeerConnection }>({})
-  // Senders de tela do Professor para cada estudante: { [studentId]: RTCRtpSender }
-  const screenSendersRef = useRef<{ [key: string]: RTCRtpSender }>({})
   // Estudante guarda conexão com o Professor
   const pcRef = useRef<RTCPeerConnection | null>(null)
   
@@ -134,11 +132,17 @@ function WebRTCLiveRoom({
   const channelRef = useRef<any>(null)
   const supabase = isSupabaseConfigured() ? createClient() : null
 
-  // Ref to track streamActive without resubscribing
+  // Ref to track streamActive and sharingScreen without resubscribing
   const streamActiveRef = useRef(streamActive)
+  const sharingScreenRef = useRef(sharingScreen)
+  
   useEffect(() => {
     streamActiveRef.current = streamActive
   }, [streamActive])
+
+  useEffect(() => {
+    sharingScreenRef.current = sharingScreen
+  }, [sharingScreen])
 
   // Track user presence metadata and update isStreaming when streamActive changes
   useEffect(() => {
@@ -212,6 +216,14 @@ function WebRTCLiveRoom({
       }
     })
 
+    // Ouvir pedido de conexão do aluno
+    channel.on('broadcast', { event: 'webrtc-request-offer' }, ({ payload }) => {
+      const { senderId } = payload
+      if (isProfessor && streamActiveRef.current && localStreamRef.current) {
+        initiateConnectionToStudent(senderId, localStreamRef.current)
+      }
+    })
+
     channel.on('broadcast', { event: 'chat-message' }, ({ payload }) => {
       setMessages(prev => [...prev, payload])
       if (!chatOpen) {
@@ -253,6 +265,15 @@ function WebRTCLiveRoom({
           role: user.role,
           isStreaming: isProfessor ? streamActiveRef.current : false
         })
+
+        // Aluno envia pedido de conexão imediatamente caso o professor já esteja online
+        if (!isProfessor) {
+          channel.send({
+            type: 'broadcast',
+            event: 'webrtc-request-offer',
+            payload: { senderId: user.id }
+          })
+        }
       }
     })
 
@@ -276,7 +297,6 @@ function WebRTCLiveRoom({
     // Fecha conexões do Professor
     Object.values(pcsRef.current).forEach(pc => pc.close())
     pcsRef.current = {}
-    screenSendersRef.current = {}
     
     // Fecha conexão do Estudante
     if (pcRef.current) {
@@ -335,11 +355,10 @@ function WebRTCLiveRoom({
     stream.getTracks().forEach(track => pc.addTrack(track, stream))
 
     // Se estiver a partilhar ecrã, adiciona também a track do ecrã
-    if (sharingScreen && screenStreamRef.current) {
+    if (sharingScreenRef.current && screenStreamRef.current) {
       const screenTrack = screenStreamRef.current.getVideoTracks()[0]
       if (screenTrack) {
-        const sender = pc.addTrack(screenTrack, screenStreamRef.current)
-        screenSendersRef.current[studentId] = sender
+        pc.addTrack(screenTrack, screenStreamRef.current)
       }
     }
 
@@ -415,11 +434,21 @@ function WebRTCLiveRoom({
       // Remove a track em todas as conexões
       Object.keys(pcsRef.current).forEach(async (studentId) => {
         const pc = pcsRef.current[studentId]
-        const sender = screenSendersRef.current[studentId]
-        if (pc && sender) {
+        if (pc) {
           try {
-            pc.removeTrack(sender)
-            delete screenSendersRef.current[studentId]
+            const senders = pc.getSenders()
+            const cameraTrack = localStreamRef.current?.getVideoTracks()[0]
+            
+            // Procura o video sender que não é a câmera local
+            const senderToRemove = senders.find(s => 
+              s.track && 
+              s.track.kind === 'video' && 
+              s.track !== cameraTrack
+            )
+
+            if (senderToRemove) {
+              pc.removeTrack(senderToRemove)
+            }
 
             // Renegocia
             const offer = await pc.createOffer()
@@ -457,8 +486,7 @@ function WebRTCLiveRoom({
           const pc = pcsRef.current[studentId]
           if (pc) {
             try {
-              const sender = pc.addTrack(screenTrack, stream)
-              screenSendersRef.current[studentId] = sender
+              pc.addTrack(screenTrack, stream)
 
               // Renegocia
               const offer = await pc.createOffer()
@@ -507,7 +535,7 @@ function WebRTCLiveRoom({
         }
       }
     }
-  }, [streamActive, sharingScreen, isProfessor])
+  }, [streamActive, sharingScreen, isProfessor, cameraOn])
 
   // ==========================================
   // LOGICA DO ESTUDANTE (Viewer)
@@ -785,7 +813,7 @@ function WebRTCLiveRoom({
                         )}
                         <span className="text-[7px] text-slate-500">{msg.timestamp}</span>
                       </div>
-                      <div className={`px-2.5 py-1.5 rounded-xl text-xs leading-normal max-w-[90%] break-words ${isMe ? 'bg-indigo-600 text-white rounded-tr-none' : 'bg-[#111622] border border-slate-800/80 text-slate-200 rounded-tl-none'}`}>
+                      <div className={`px-2.5 py-1.5 rounded-xl text-xs leading-normal max-w-[90%] break-words ${isMe ? 'bg-indigo-650 text-white rounded-tr-none' : 'bg-[#111622] border border-slate-800/80 text-slate-200 rounded-tl-none'}`}>
                         {msg.text}
                       </div>
                     </div>
@@ -876,4 +904,5 @@ function WebRTCLiveRoom({
     </div>
   )
 }
+
 
