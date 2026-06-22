@@ -42,6 +42,8 @@ export interface Aula {
   data_hora_live?: string | null // ISO string
   sala_live_id?: string | null
   criado_em: string
+  concluida?: boolean
+  live_iniciada?: boolean
   materiais?: Material[]
   exercicios?: Exercicio[]
 }

@@ -11,6 +11,7 @@ import {
   getEnrollments, 
   submitExerciseResponse, 
   getExerciseResponses, 
+  updateLesson,
   Curso, 
   Aula, 
   Inscricao,
@@ -32,7 +33,9 @@ import {
   AlertTriangle,
   Menu,
   ChevronRight,
-  Lock
+  Lock,
+  Shield,
+  X
 } from 'lucide-react'
 
 export default function ClassroomPage() {
@@ -52,6 +55,10 @@ export default function ClassroomPage() {
   
   // Controle de Live Forçada para Testes
   const [forceLive, setForceLive] = useState(false)
+
+  // Controle de Visualização: 'course' (Acompanhamento) ou 'live' (Sala de Transmissão)
+  const [viewMode, setViewMode] = useState<'course' | 'live'>('course')
+  const [playlistOpen, setPlaylistOpen] = useState(false)
 
   // Leitor Interno de PDF
   const [activePdfUrl, setActivePdfUrl] = useState<string | null>(null)
@@ -138,6 +145,7 @@ export default function ClassroomPage() {
   useEffect(() => {
     setActivePdfUrl(null)
     setActivePdfTitle('')
+    setViewMode('course')
   }, [aulaId])
 
   // Submeter Exercício
@@ -160,36 +168,81 @@ export default function ClassroomPage() {
     }
   }
 
-  // Verifica se uma aula (qualquer) é uma live futura ainda bloqueada
+  // Verifica se uma aula (qualquer) é uma live futura ainda bloqueada (dia não chegou)
   const isFutureLive = (lesson: Aula) => {
     if (!lesson.data_hora_live) return false
     if (user?.role !== 'aluno') return false
-    const liveTime = new Date(lesson.data_hora_live).getTime()
-    return new Date().getTime() < (liveTime - 15 * 60 * 1000)
+    
+    const liveDate = new Date(lesson.data_hora_live)
+    const today = new Date()
+    
+    // Zera as horas para comparar apenas os dias
+    const liveDay = new Date(liveDate.getFullYear(), liveDate.getMonth(), liveDate.getDate()).getTime()
+    const todayDay = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime()
+    
+    return todayDay < liveDay
   }
 
-  // Verifica se o aluno está tentando entrar antes da hora da live ATUAL
+  // Verifica se o aluno está tentando entrar antes do dia da live ATUAL
   const isLessonLocked = () => {
     if (!currentLesson?.data_hora_live) return false
     if (user?.role !== 'aluno') return false // Professor e Admin sempre podem acessar
     
-    const liveTime = new Date(currentLesson.data_hora_live).getTime()
-    const now = new Date().getTime()
+    const liveDate = new Date(currentLesson.data_hora_live)
+    const today = new Date()
     
-    // Bloqueia se faltar mais de 15 minutos para iniciar
-    return now < (liveTime - 15 * 60 * 1000)
+    const liveDay = new Date(liveDate.getFullYear(), liveDate.getMonth(), liveDate.getDate()).getTime()
+    const todayDay = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime()
+    
+    return todayDay < liveDay
   }
 
-  // Verifica se a live está acontecendo agora (ou agendada para hoje)
+  // Verifica se a live está acontecendo agora (iniciada pelo professor)
   const isLiveActive = () => {
     if (forceLive) return true
-    if (!currentLesson?.data_hora_live) return false
-    
-    const liveTime = new Date(currentLesson.data_hora_live).getTime()
-    const now = new Date().getTime()
-    
-    // Mostra o player se faltar 15 min ou se já tiver começado
-    return now >= (liveTime - 15 * 60 * 1000)
+    return !!currentLesson?.live_iniciada
+  }
+
+  // Alternar Status da Live (Professor)
+  const handleToggleLive = async () => {
+    if (!currentLesson) return
+    const nextState = !currentLesson.live_iniciada
+    try {
+      const updates = { 
+        live_iniciada: nextState,
+        ...(nextState ? { concluida: false } : {})
+      }
+      const success = await updateLesson(currentLesson.id, updates)
+      if (success) {
+        setCurrentLesson(prev => prev ? { ...prev, ...updates } : null)
+        if (!nextState) {
+          setViewMode('course')
+        }
+      }
+    } catch (err) {
+      console.error("Erro ao alternar status da live:", err)
+    }
+  }
+
+  // Alternar Conclusão da Aula (Professor)
+  const handleToggleComplete = async () => {
+    if (!currentLesson) return
+    const nextState = !currentLesson.concluida
+    try {
+      const updates = {
+        concluida: nextState,
+        ...(nextState ? { live_iniciada: false } : {})
+      }
+      const success = await updateLesson(currentLesson.id, updates)
+      if (success) {
+        setCurrentLesson(prev => prev ? { ...prev, ...updates } : null)
+        if (nextState) {
+          setViewMode('course')
+        }
+      }
+    } catch (err) {
+      console.error("Erro ao concluir/reabrir aula:", err)
+    }
   }
 
   if (authLoading || loading) {
@@ -245,9 +298,254 @@ export default function ClassroomPage() {
     )
   }
 
+  if (viewMode === 'live') {
+    return (
+      <div className="min-h-screen bg-[#070b13] text-slate-100 font-sans flex flex-col relative">
+        {/* MOBILE PLAYLIST DRAWER */}
+        {playlistOpen && (
+          <div className="fixed inset-0 z-50 flex lg:hidden">
+            <div 
+              className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm transition-opacity"
+              onClick={() => setPlaylistOpen(false)}
+            />
+            <aside className="relative flex flex-col w-80 max-w-[85vw] h-full bg-[#0b101d] border-l border-slate-800 p-6 space-y-4 shadow-2xl ml-auto">
+              <button 
+                onClick={() => setPlaylistOpen(false)}
+                className="absolute top-4 right-4 p-1.5 rounded-lg bg-slate-900 text-slate-400 hover:text-white border-0 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+
+              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500 pb-2 border-b border-slate-800 flex items-center gap-2">
+                <Menu className="w-4 h-4 text-indigo-400" />
+                <span>Índice do Curso</span>
+              </h3>
+
+              <div className="flex-1 overflow-y-auto space-y-3 pr-1 scrollbar-none">
+                {lessons.map((lesson) => {
+                  const isActive = lesson.id === aulaId
+                  const isLive = !!lesson.data_hora_live
+                  const locked = isFutureLive(lesson)
+
+                  if (locked) {
+                    return (
+                      <div
+                        key={lesson.id}
+                        title={`Disponível em: ${new Date(lesson.data_hora_live!).toLocaleString('pt-AO')}`}
+                        className="flex items-start gap-3 p-3.5 rounded-xl border border-slate-800/50 bg-[#0a0d17] opacity-60 cursor-not-allowed select-none"
+                      >
+                        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-slate-800 text-slate-600">
+                          <Lock className="w-4 h-4" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs font-semibold leading-snug line-clamp-2 text-slate-500">
+                            {lesson.titulo}
+                          </p>
+                          <div className="flex items-center gap-1.5 mt-1.5">
+                            <Lock className="w-2.5 h-2.5 text-slate-600" />
+                            <span className="text-[10px] text-slate-600">
+                              {lesson.data_hora_live ? new Date(lesson.data_hora_live).toLocaleString('pt-AO', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : 'Agendada'}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    )
+                  }
+
+                  return (
+                    <Link
+                      key={lesson.id}
+                      href={`/cursos/${courseId}/aula/${lesson.id}`}
+                      onClick={() => setPlaylistOpen(false)}
+                      className={`flex items-start gap-3 p-3.5 rounded-xl border transition-all ${
+                        isActive 
+                          ? 'bg-indigo-500/10 border-indigo-500/40 text-white' 
+                          : 'bg-[#0f1525] border-slate-800/50 hover:bg-[#151c2e] hover:border-slate-700 text-slate-300'
+                      }`}
+                    >
+                      <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${
+                        isActive 
+                          ? 'bg-indigo-600 text-white shadow' 
+                          : isLive 
+                            ? 'bg-red-500/10 text-red-400 border border-red-500/15'
+                            : 'bg-slate-800 text-slate-400'
+                      }`}>
+                        {isLive ? <Video className="w-4 h-4" /> : <BookOpen className="w-4 h-4" />}
+                      </div>
+                      
+                      <div className="flex-1 min-w-0">
+                        <p className={`text-xs font-semibold leading-snug line-clamp-2 ${isActive ? 'text-white' : 'text-slate-200'}`}>
+                          {lesson.titulo}
+                        </p>
+                        <div className="flex items-center gap-2 mt-1.5">
+                          {isLive && (
+                            <span className="inline-flex h-2 w-2 rounded-full bg-red-500 animate-pulse" />
+                          )}
+                          <span className="text-[10px] text-slate-500">
+                            {isLive ? 'Aula ao Vivo' : 'Material de Apoio'}
+                          </span>
+                        </div>
+                      </div>
+                    </Link>
+                  )
+                })}
+              </div>
+            </aside>
+          </div>
+        )}
+
+        {/* Header da Sala de Live */}
+        <header className="bg-[#0b101d] border-b border-slate-800/80 py-4 px-6 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => setViewMode('course')}
+              className="flex h-9 w-9 items-center justify-center rounded-xl bg-slate-800 text-slate-400 hover:text-white transition-colors cursor-pointer border-0"
+            >
+              <ArrowLeft className="w-5 h-5" />
+            </button>
+            <div>
+              <span className="text-[10px] uppercase font-bold text-slate-500 tracking-wider">
+                {course?.titulo}
+              </span>
+              <h2 className="text-sm sm:text-base font-bold text-white line-clamp-1">
+                Sala de Transmissão ao Vivo: {currentLesson?.titulo}
+              </h2>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-3">
+            <span className="relative flex h-2 w-2">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-red-500"></span>
+            </span>
+            <span className="text-xs font-bold text-red-400 mr-2 uppercase tracking-wide">AO VIVO</span>
+            
+            <button
+              onClick={() => setPlaylistOpen(true)}
+              className="lg:hidden flex h-9 px-3 items-center justify-center gap-1.5 rounded-xl bg-slate-800 text-slate-400 hover:text-white transition-colors cursor-pointer border-0"
+            >
+              <Menu className="w-4 h-4" />
+              <span className="text-xs font-semibold">Índice</span>
+            </button>
+
+            <button
+              onClick={() => setViewMode('course')}
+              className="px-4 py-2 bg-indigo-650 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold shadow transition-colors cursor-pointer border-0"
+            >
+              Voltar aos Conteúdos da Aula
+            </button>
+          </div>
+        </header>
+
+        {/* Live Room Container */}
+        <div className="flex-1 flex flex-col bg-[#070b13]">
+          {user && currentLesson ? (
+            <CustomLiveRoom 
+              roomName={currentLesson.sala_live_id || `cspace-live-${currentLesson.id}`} 
+              user={user} 
+            />
+          ) : null}
+        </div>
+      </div>
+    )
+  }
+
   return (
-    <div className="min-h-screen bg-[#070b13] text-slate-100 font-sans flex flex-col">
+    <div className="min-h-screen bg-[#070b13] text-slate-100 font-sans flex flex-col relative">
       
+      {/* MOBILE PLAYLIST DRAWER */}
+      {playlistOpen && (
+        <div className="fixed inset-0 z-50 flex lg:hidden">
+          <div 
+            className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm transition-opacity"
+            onClick={() => setPlaylistOpen(false)}
+          />
+          <aside className="relative flex flex-col w-80 max-w-[85vw] h-full bg-[#0b101d] border-l border-slate-800 p-6 space-y-4 shadow-2xl ml-auto">
+            <button 
+              onClick={() => setPlaylistOpen(false)}
+              className="absolute top-4 right-4 p-1.5 rounded-lg bg-slate-900 text-slate-400 hover:text-white border-0 cursor-pointer"
+            >
+              <X className="w-4 h-4" />
+            </button>
+
+            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500 pb-2 border-b border-slate-800 flex items-center gap-2">
+              <Menu className="w-4 h-4 text-indigo-400" />
+              <span>Índice do Curso</span>
+            </h3>
+
+            <div className="flex-1 overflow-y-auto space-y-3 pr-1 scrollbar-none">
+              {lessons.map((lesson) => {
+                const isActive = lesson.id === aulaId
+                const isLive = !!lesson.data_hora_live
+                const locked = isFutureLive(lesson)
+
+                if (locked) {
+                  return (
+                    <div
+                      key={lesson.id}
+                      title={`Disponível em: ${new Date(lesson.data_hora_live!).toLocaleString('pt-AO')}`}
+                      className="flex items-start gap-3 p-3.5 rounded-xl border border-slate-800/50 bg-[#0a0d17] opacity-60 cursor-not-allowed select-none"
+                    >
+                      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-slate-800 text-slate-600">
+                        <Lock className="w-4 h-4" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs font-semibold leading-snug line-clamp-2 text-slate-500">
+                          {lesson.titulo}
+                        </p>
+                        <div className="flex items-center gap-1.5 mt-1.5">
+                          <Lock className="w-2.5 h-2.5 text-slate-600" />
+                          <span className="text-[10px] text-slate-600">
+                            {lesson.data_hora_live ? new Date(lesson.data_hora_live).toLocaleString('pt-AO', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : 'Agendada'}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  )
+                }
+
+                return (
+                  <Link
+                    key={lesson.id}
+                    href={`/cursos/${courseId}/aula/${lesson.id}`}
+                    onClick={() => setPlaylistOpen(false)}
+                    className={`flex items-start gap-3 p-3.5 rounded-xl border transition-all ${
+                      isActive 
+                        ? 'bg-indigo-500/10 border-indigo-500/40 text-white' 
+                        : 'bg-[#0f1525] border-slate-800/50 hover:bg-[#151c2e] hover:border-slate-700 text-slate-300'
+                    }`}
+                  >
+                    <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${
+                      isActive 
+                        ? 'bg-indigo-600 text-white shadow' 
+                        : isLive 
+                          ? 'bg-red-500/10 text-red-400 border border-red-500/15'
+                          : 'bg-slate-800 text-slate-400'
+                    }`}>
+                      {isLive ? <Video className="w-4 h-4" /> : <BookOpen className="w-4 h-4" />}
+                    </div>
+                    
+                    <div className="flex-1 min-w-0">
+                      <p className={`text-xs font-semibold leading-snug line-clamp-2 ${isActive ? 'text-white' : 'text-slate-200'}`}>
+                        {lesson.titulo}
+                      </p>
+                      <div className="flex items-center gap-2 mt-1.5">
+                        {isLive && (
+                          <span className="inline-flex h-2 w-2 rounded-full bg-red-500 animate-pulse" />
+                        )}
+                        <span className="text-[10px] text-slate-500">
+                          {isLive ? 'Aula ao Vivo' : 'Material de Apoio'}
+                        </span>
+                      </div>
+                    </div>
+                  </Link>
+                )
+              })}
+            </div>
+          </aside>
+        </div>
+      )}
+
       {/* Header da Aula */}
       <header className="bg-[#0b101d] border-b border-slate-800/80 py-4 px-6 flex items-center justify-between">
         <div className="flex items-center gap-3">
@@ -276,8 +574,17 @@ export default function ClassroomPage() {
               </span>
             </span>
           )}
+          
+          <button
+            onClick={() => setPlaylistOpen(true)}
+            className="lg:hidden flex h-9 px-3 items-center justify-center gap-1.5 rounded-xl bg-slate-800 text-slate-400 hover:text-white transition-colors cursor-pointer border-0"
+          >
+            <Menu className="w-4 h-4" />
+            <span className="text-xs font-semibold">Índice</span>
+          </button>
+
           <span className="text-xs bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 px-3 py-1.5 rounded-xl font-semibold">
-            {user?.role === 'admin' ? '🧑‍💼 Professor / Admin' : '🧑‍🎓 Aluno'}
+            {user?.role === 'admin' || user?.role === 'professor' ? '🧑‍💼 Professor / Admin' : '🧑‍🎓 Aluno'}
           </span>
         </div>
       </header>
@@ -288,45 +595,107 @@ export default function ClassroomPage() {
         {/* Esquerda: Player de Vídeo / Jitsi / Abas */}
         <div className="flex-1 flex flex-col p-6 space-y-6 lg:overflow-y-auto lg:max-h-[calc(100vh-70px)]">
           
-          {/* Box de Exibição de Conteúdo (Video/Live Room) */}
-          <div className="w-full max-w-5xl mx-auto">
-            
-            {isLiveActive() ? (
-              user && currentLesson ? (
-                <CustomLiveRoom 
-                  roomName={currentLesson.sala_live_id || `cspace-live-${currentLesson.id}`} 
-                  user={user} 
-                />
-              ) : null
-            ) : (
-              // Estado Offline da Live
-              <div className="w-full min-h-[380px] flex flex-col items-center justify-center p-8 text-center bg-[#090d16] rounded-2xl border border-slate-800 shadow-2xl">
-                <Video className="w-12 h-12 text-slate-600 mb-4" />
-                <h3 className="text-lg font-bold text-slate-300">A aula ao vivo ainda não começou</h3>
-                
-                {currentLesson?.data_hora_live ? (
-                  <p className="text-xs text-slate-400 mt-2 max-w-sm leading-relaxed">
-                    Esta aula tem uma transmissão programada para{' '}
-                    <strong>{new Date(currentLesson.data_hora_live).toLocaleString('pt-AO')}</strong>. 
-                    O acesso à sala será liberado 15 minutos antes.
-                  </p>
-                ) : (
-                  <p className="text-xs text-slate-400 mt-2 max-w-sm leading-relaxed">
-                    Esta aula não possui transmissão ao vivo agendada. Consulte os materiais PDFs e realize os exercícios abaixo.
-                  </p>
-                )}
-
-                {/* Botão de Bypass de Testes */}
-                <button
-                  onClick={() => setForceLive(true)}
-                  className="mt-6 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold shadow transition-colors flex items-center gap-1.5"
-                >
-                  <Play className="w-3.5 h-3.5" />
-                  <span>Testar Live Integrada Agora (Modo Teste)</span>
-                </button>
+          {/* Painel do Professor */}
+          {(user?.role === 'professor' || user?.role === 'admin') && (
+            <div className="w-full max-w-5xl mx-auto bg-[#0b1220] border border-indigo-500/30 rounded-2xl p-5 shadow-xl flex flex-col md:flex-row md:items-center justify-between gap-4 animate-fade-in">
+              <div className="space-y-1">
+                <span className="text-[10px] font-black uppercase text-indigo-400 tracking-wider flex items-center gap-1.5">
+                  <Shield className="w-3.5 h-3.5 animate-pulse" />
+                  Painel de Controle do Docente
+                </span>
+                <h3 className="text-sm font-bold text-white">Gerenciamento da Transmissão e Aula</h3>
+                <p className="text-xs text-slate-450">
+                  Defina a visibilidade da live e libere os exercícios concluindo a aula.
+                </p>
               </div>
-            )}
-          </div>
+
+              <div className="flex flex-wrap items-center gap-2.5">
+                <button
+                  onClick={handleToggleLive}
+                  className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${
+                    currentLesson?.live_iniciada
+                      ? 'bg-rose-600 hover:bg-rose-700 text-white shadow-lg shadow-rose-900/20'
+                      : 'bg-indigo-600 hover:bg-indigo-700 text-white'
+                  }`}
+                >
+                  <Video className="w-4 h-4" />
+                  <span>{currentLesson?.live_iniciada ? 'Encerrar Live' : 'Iniciar Live'}</span>
+                </button>
+
+                <button
+                  onClick={handleToggleComplete}
+                  className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer border ${
+                    currentLesson?.concluida
+                      ? 'bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-750'
+                      : 'bg-emerald-600 hover:bg-emerald-700 border-transparent text-white shadow-lg shadow-emerald-900/20'
+                  }`}
+                >
+                  <CheckCircle className="w-4 h-4" />
+                  <span>{currentLesson?.concluida ? 'Aula Concluída (Reabrir)' : 'Marcar Aula como Concluída'}</span>
+                </button>
+
+                {currentLesson?.live_iniciada && (
+                  <button
+                    onClick={() => setViewMode('live')}
+                    className="px-4 py-2 bg-indigo-500/20 hover:bg-indigo-500/35 border border-indigo-500/40 text-indigo-300 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer"
+                  >
+                    <span>Entrar na Sala da Live</span>
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Banner de Status da Live para o Aluno */}
+          {user?.role === 'aluno' && (
+            <div className="w-full max-w-5xl mx-auto">
+              {isLiveActive() ? (
+                <div className="bg-gradient-to-r from-red-650 to-indigo-650 rounded-2xl p-6 shadow-xl flex flex-col sm:flex-row sm:items-center justify-between gap-4 animate-pulse">
+                  <div className="space-y-1">
+                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-red-500 text-[9px] font-black tracking-widest text-white uppercase">
+                      🔴 Em Direto
+                    </span>
+                    <h3 className="text-sm sm:text-base font-bold text-white">
+                      A transmissão ao vivo desta aula está acontecendo agora!
+                    </h3>
+                    <p className="text-xs text-indigo-150">
+                      Entre na sala de transmissão para interagir com o professor e outros alunos.
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => setViewMode('live')}
+                    className="px-5 py-2.5 bg-white hover:bg-slate-100 text-indigo-950 rounded-xl text-xs font-bold shadow-lg transition-colors cursor-pointer shrink-0"
+                  >
+                    Entrar na Sala da Live
+                  </button>
+                </div>
+              ) : currentLesson?.concluida ? (
+                <div className="bg-[#0a0f1d] border border-slate-800 rounded-2xl p-5 shadow-lg flex items-center gap-4">
+                  <div className="h-10 w-10 rounded-xl bg-emerald-500/10 text-emerald-400 flex items-center justify-center border border-emerald-500/20 shrink-0">
+                    <CheckCircle className="w-5 h-5 text-emerald-400" />
+                  </div>
+                  <div className="space-y-0.5">
+                    <h3 className="text-xs font-bold text-white">Esta aula foi concluída!</h3>
+                    <p className="text-[11px] text-slate-400">
+                      Você já pode responder aos exercícios avaliativos e acessar os materiais complementares.
+                    </p>
+                  </div>
+                </div>
+              ) : currentLesson?.data_hora_live ? (
+                <div className="bg-[#0a0f1d] border border-slate-800 rounded-2xl p-5 shadow-lg flex items-center gap-4">
+                  <div className="h-10 w-10 rounded-xl bg-slate-800 text-slate-500 flex items-center justify-center border border-slate-700/50 shrink-0">
+                    <Calendar className="w-5 h-5 text-indigo-400" />
+                  </div>
+                  <div className="space-y-0.5">
+                    <h3 className="text-xs font-bold text-slate-350">A live está temporariamente inativa</h3>
+                    <p className="text-[11px] text-slate-400">
+                      Aguardando o professor iniciar a transmissão. Os materiais já estão disponíveis abaixo para estudo.
+                    </p>
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          )}
 
           {/* Abas e Materiais */}
           <div className="w-full max-w-5xl mx-auto bg-[#0a0f1d] border border-slate-800 rounded-2xl flex flex-col">
@@ -502,7 +871,19 @@ export default function ClassroomPage() {
                 <div className="space-y-6">
                   <h3 className="text-base font-bold text-white">Questões Avaliativas</h3>
                   
-                  {!currentLesson?.exercicios || currentLesson.exercicios.length === 0 ? (
+                  {!(currentLesson?.concluida) && user?.role === 'aluno' ? (
+                    <div className="py-12 flex flex-col items-center justify-center text-center space-y-4 max-w-sm mx-auto animate-fade-in">
+                      <div className="h-14 w-14 rounded-full bg-slate-800/80 text-slate-500 border border-slate-750 flex items-center justify-center shadow-inner">
+                        <Lock className="w-6 h-6" />
+                      </div>
+                      <div className="space-y-1">
+                        <h4 className="text-xs font-bold text-slate-350">Exercícios Bloqueados</h4>
+                        <p className="text-[11px] text-slate-500 leading-relaxed">
+                          As questões avaliativas serão desbloqueadas assim que o professor marcar esta aula como concluída. Participe da live e estude os materiais!
+                        </p>
+                      </div>
+                    </div>
+                  ) : !currentLesson?.exercicios || currentLesson.exercicios.length === 0 ? (
                     <p className="text-xs text-slate-500">Nenhum exercício disponível para esta aula.</p>
                   ) : (
                     <div className="space-y-6">

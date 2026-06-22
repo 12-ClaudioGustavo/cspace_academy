@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useEffect, useRef, useState } from 'react'
+import React, { useEffect, useRef, useState, useCallback } from 'react'
 import { Perfil, isSupabaseConfigured } from '@/lib/db'
 import { createClient } from '@/lib/supabase/client'
 import { 
@@ -8,6 +8,14 @@ import {
   Play, Users, Shield, AlertCircle, RefreshCw, ExternalLink,
   MessageSquare, Send, X, Maximize, Minimize, Maximize2, Minimize2
 } from 'lucide-react'
+
+export interface PresentUser {
+  id: string
+  nome: string
+  role: 'admin' | 'professor' | 'aluno'
+  handRaised?: boolean
+  micAuthorized?: boolean
+}
 
 interface CustomLiveRoomProps {
   roomName: string
@@ -100,6 +108,9 @@ function WebRTCLiveRoom({
   
   const [streamActive, setStreamActive] = useState(false)
   const [onlineStudents, setOnlineStudents] = useState<string[]>([])
+  const [onlineUsers, setOnlineUsers] = useState<PresentUser[]>([])
+  const handRaisedRef = useRef(false)
+  const micAuthorizedRef = useRef(false)
   const [micOn, setMicOn] = useState(true)
   const [cameraOn, setCameraOn] = useState(true)
   const [sharingScreen, setSharingScreen] = useState(false)
@@ -121,6 +132,7 @@ function WebRTCLiveRoom({
   // Chat state
   const [messages, setMessages] = useState<any[]>([])
   const [chatOpen, setChatOpen] = useState(false)
+  const [activeSidebarTab, setActiveSidebarTab] = useState<'chat' | 'participants'>('chat')
   const [chatInput, setChatInput] = useState('')
   const [unreadCount, setUnreadCount] = useState(0)
   
@@ -143,6 +155,10 @@ function WebRTCLiveRoom({
   // Estudante guarda conexão com o Professor
   const pcRef = useRef<RTCPeerConnection | null>(null)
   
+  // Identificadores de Sessão de Conexão para evitar condições de corrida (Race Conditions)
+  const connectionIdsRef = useRef<{ [key: string]: string }>({})
+  const connectionIdRef = useRef<string | null>(null)
+  
   // Filas para guardar candidatos ICE recebidos antes do remoteDescription estar definido
   const studentQueuedCandidatesRef = useRef<RTCIceCandidateInit[]>([])
   const professorQueuedCandidatesRef = useRef<{ [key: string]: RTCIceCandidateInit[] }>({})
@@ -163,16 +179,30 @@ function WebRTCLiveRoom({
     sharingScreenRef.current = sharingScreen
   }, [sharingScreen])
 
-  // Track user presence metadata and update isStreaming when streamActive changes
   useEffect(() => {
+    handRaisedRef.current = handRaised
+  }, [handRaised])
+
+  useEffect(() => {
+    micAuthorizedRef.current = micAuthorized
+  }, [micAuthorized])
+
+  const updatePresenceMetadata = useCallback(async (overrides: Record<string, any> = {}) => {
     if (channelRef.current && supabase) {
-      channelRef.current.track({
+      await channelRef.current.track({
         nome: user.nome,
         role: user.role,
-        isStreaming: isProfessor ? streamActive : false
+        isStreaming: isProfessor ? streamActiveRef.current : false,
+        handRaised: !isProfessor ? handRaisedRef.current : false,
+        micAuthorized: !isProfessor ? micAuthorizedRef.current : false,
+        ...overrides
       })
     }
-  }, [streamActive, isProfessor, user.nome, user.role, supabase])
+  }, [user.nome, user.role, isProfessor, supabase])
+
+  useEffect(() => {
+    updatePresenceMetadata()
+  }, [streamActive, handRaised, micAuthorized, updatePresenceMetadata])
 
   // Scroll to bottom of chat when new messages arrive
   useEffect(() => {
@@ -211,15 +241,35 @@ function WebRTCLiveRoom({
 
     // Ouvir mensagens de sinalização do WebRTC e Chat
     channel.on('broadcast', { event: 'webrtc-signal' }, async ({ payload }) => {
-      const { targetId, senderId, type, data } = payload
+      const { targetId, senderId, type, connectionId, data } = payload
       
       // Apenas processa se for direcionado a mim
       if (targetId !== user.id) return
 
       try {
+        // Validação de Session/Connection ID para evitar condições de corrida (Race Conditions)
+        if (connectionId) {
+          if (isProfessor) {
+            const currentId = connectionIdsRef.current[senderId]
+            if (currentId && currentId !== connectionId) {
+              console.warn(`[WebRTC] Sinal '${type}' descartado no professor: ID antigo (${connectionId}) vs atual (${currentId})`)
+              return
+            }
+          } else {
+            const currentId = connectionIdRef.current
+            if (currentId && currentId !== connectionId) {
+              console.warn(`[WebRTC] Sinal '${type}' descartado no aluno: ID antigo (${connectionId}) vs atual (${currentId})`)
+              return
+            }
+          }
+        }
+
         if (type === 'offer' && !isProfessor) {
           // Estudante recebe proposta do Professor
-          await handleOffer(senderId, data)
+          if (connectionId) {
+            connectionIdRef.current = connectionId
+          }
+          await handleOffer(senderId, data, connectionId)
         } else if (type === 'answer' && isProfessor) {
           // Professor recebe resposta do Estudante
           await handleAnswer(senderId, data)
@@ -295,7 +345,10 @@ function WebRTCLiveRoom({
       const { targetId } = payload
       if (!isProfessor && targetId === user.id) {
         setMicAuthorized(true)
+        micAuthorizedRef.current = true
         setHandRaised(false)
+        handRaisedRef.current = false
+        updatePresenceMetadata()
       }
     })
 
@@ -303,28 +356,40 @@ function WebRTCLiveRoom({
       const { targetId } = payload
       if (!isProfessor && targetId === user.id) {
         setMicAuthorized(false)
+        micAuthorizedRef.current = false
         setHandRaised(false)
+        handRaisedRef.current = false
         setStudentMicOn(false)
         studentMicOnRef.current = false
         if (studentLocalStreamRef.current) {
           const track = studentLocalStreamRef.current.getAudioTracks()[0]
           if (track) track.enabled = false
         }
+        updatePresenceMetadata()
       }
     })
 
     // Presença: rastrear quem está online na sala
     channel.on('presence', { event: 'sync' }, () => {
       const presenceState = channel.presenceState()
-      const list: string[] = []
+      const names: string[] = []
+      const usersList: PresentUser[] = []
       
       Object.keys(presenceState).forEach(id => {
         const pres = presenceState[id] as any
         if (pres && pres[0]) {
-          list.push(pres[0].nome || 'Utilizador')
+          names.push(pres[0].nome || 'Utilizador')
+          usersList.push({
+            id: id,
+            nome: pres[0].nome || 'Utilizador',
+            role: pres[0].role || 'aluno',
+            handRaised: pres[0].handRaised || false,
+            micAuthorized: pres[0].micAuthorized || false
+          })
         }
       })
-      setOnlineStudents(list.filter(n => n !== user.nome))
+      setOnlineStudents(names.filter(n => n !== user.nome))
+      setOnlineUsers(usersList)
 
       // Se for professor e a live estiver ativa, iniciar conexão com quem não tiver conexão ativa
       if (isProfessor && streamActiveRef.current && localStreamRef.current) {
@@ -342,11 +407,7 @@ function WebRTCLiveRoom({
     // Inscreve no canal com metadata do utilizador
     channel.subscribe(async (status) => {
       if (status === 'SUBSCRIBED') {
-        await channel.track({
-          nome: user.nome,
-          role: user.role,
-          isStreaming: isProfessor ? streamActiveRef.current : false
-        })
+        await updatePresenceMetadata()
 
         // Aluno envia pedido de conexão imediatamente caso o professor já esteja online
         if (!isProfessor) {
@@ -444,6 +505,10 @@ function WebRTCLiveRoom({
     })
     pcsRef.current[studentId] = pc
 
+    // Cria um identificador único de sessão para esta conexão
+    const connId = Math.random().toString(36).substring(2, 11) + '-' + Date.now()
+    connectionIdsRef.current[studentId] = connId
+
     // Adiciona tracks locais de camera e áudio
     stream.getTracks().forEach(track => pc.addTrack(track, stream))
 
@@ -482,7 +547,7 @@ function WebRTCLiveRoom({
       }
     }
 
-    // Envia candidatos ICE
+    // Envia candidatos ICE com o connectionId correspondente
     pc.onicecandidate = (event) => {
       if (event.candidate && channelRef.current) {
         channelRef.current.send({
@@ -492,6 +557,7 @@ function WebRTCLiveRoom({
             targetId: studentId,
             senderId: user.id,
             type: 'ice-candidate',
+            connectionId: connId,
             data: event.candidate
           }
         })
@@ -510,6 +576,7 @@ function WebRTCLiveRoom({
           targetId: studentId,
           senderId: user.id,
           type: 'offer',
+          connectionId: connId,
           data: offer
         }
       })
@@ -604,12 +671,14 @@ function WebRTCLiveRoom({
     if (!channelRef.current) return
     const nextState = !handRaised
     setHandRaised(nextState)
+    handRaisedRef.current = nextState
     
     channelRef.current.send({
       type: 'broadcast',
       event: nextState ? 'raise-hand' : 'lower-hand',
       payload: { studentId: user.id, nome: user.nome }
     })
+    updatePresenceMetadata()
   }
 
   const handleAuthorizeMic = (studentId: string, authorize: boolean) => {
@@ -711,6 +780,7 @@ function WebRTCLiveRoom({
             // Renegocia
             const offer = await pc.createOffer()
             await pc.setLocalDescription(offer)
+            const connId = connectionIdsRef.current[studentId]
             channelRef.current.send({
               type: 'broadcast',
               event: 'webrtc-signal',
@@ -718,6 +788,7 @@ function WebRTCLiveRoom({
                 targetId: studentId,
                 senderId: user.id,
                 type: 'offer',
+                connectionId: connId,
                 data: offer
               }
             })
@@ -749,6 +820,7 @@ function WebRTCLiveRoom({
               // Renegocia
               const offer = await pc.createOffer()
               await pc.setLocalDescription(offer)
+              const connId = connectionIdsRef.current[studentId]
               channelRef.current.send({
                 type: 'broadcast',
                 event: 'webrtc-signal',
@@ -756,6 +828,7 @@ function WebRTCLiveRoom({
                   targetId: studentId,
                   senderId: user.id,
                   type: 'offer',
+                  connectionId: connId,
                   data: offer
                 }
               })
@@ -798,7 +871,7 @@ function WebRTCLiveRoom({
   // ==========================================
   // LOGICA DO ESTUDANTE (Viewer)
   // ==========================================
-  const handleOffer = async (professorId: string, offer: RTCSessionDescriptionInit) => {
+  const handleOffer = async (professorId: string, offer: RTCSessionDescriptionInit, connectionId?: string) => {
     if (pcRef.current && pcRef.current.remoteDescription && pcRef.current.remoteDescription.sdp === offer.sdp) {
       return
     }
@@ -834,6 +907,7 @@ function WebRTCLiveRoom({
               targetId: professorId,
               senderId: user.id,
               type: 'ice-candidate',
+              connectionId: connectionId,
               data: event.candidate
             }
           })
@@ -931,6 +1005,7 @@ function WebRTCLiveRoom({
             targetId: professorId,
             senderId: user.id,
             type: 'answer',
+            connectionId: connectionId,
             data: answer
           }
         })
@@ -1250,62 +1325,128 @@ function WebRTCLiveRoom({
         </div>
 
         {/* Chat Sidebar */}
+        {/* Chat Sidebar */}
         {chatOpen && (
           <div className="w-full md:w-80 border-t md:border-t-0 md:border-l border-slate-800 bg-[#0c1220] flex flex-col shrink-0 h-[250px] md:h-auto">
-            {/* Chat Header */}
-            <div className="px-3 py-2 border-b border-slate-800 flex justify-between items-center bg-[#080c17]">
-              <span className="text-[10px] font-bold text-slate-350 uppercase tracking-wider">Chat da Live</span>
-              <button onClick={() => setChatOpen(false)} className="text-slate-500 hover:text-white transition-colors">
+            {/* Sidebar Tabs */}
+            <div className="flex border-b border-slate-800 bg-[#080c17]">
+              <button
+                onClick={() => setActiveSidebarTab('chat')}
+                className={`flex-1 py-3.5 text-[9px] font-black uppercase tracking-wider border-b-2 transition-all ${
+                  activeSidebarTab === 'chat' 
+                    ? 'border-indigo-500 text-white bg-[#0c1220]' 
+                    : 'border-transparent text-slate-400 hover:text-white'
+                }`}
+              >
+                Dúvidas (Chat)
+              </button>
+              <button
+                onClick={() => setActiveSidebarTab('participants')}
+                className={`flex-1 py-3.5 text-[9px] font-black uppercase tracking-wider border-b-2 transition-all relative ${
+                  activeSidebarTab === 'participants' 
+                    ? 'border-indigo-500 text-white bg-[#0c1220]' 
+                    : 'border-transparent text-slate-400 hover:text-white'
+                }`}
+              >
+                Participantes
+                <span className="ml-1.5 px-1.5 py-0.2 bg-slate-850 border border-slate-700/60 rounded-full text-[8px] text-slate-300 font-bold">
+                  {onlineUsers.length}
+                </span>
+              </button>
+              <button 
+                onClick={() => setChatOpen(false)} 
+                className="px-3.5 text-slate-500 hover:text-white transition-colors border-l border-slate-800 flex items-center justify-center"
+              >
                 <X className="w-3.5 h-3.5" />
               </button>
             </div>
 
-            {/* Messages List */}
-            <div className="flex-1 overflow-y-auto p-3 space-y-3">
-              {messages.length === 0 ? (
-                <p className="text-[10px] text-slate-500 text-center py-6 leading-relaxed">Nenhuma dúvida enviada ainda.<br />Seja o primeiro a enviar!</p>
-              ) : (
-                messages.map(msg => {
-                  const isMe = msg.senderId === user.id;
-                  const isDocente = msg.role === 'professor' || msg.role === 'admin';
-                  return (
-                    <div key={msg.id} className={`flex flex-col ${isMe ? 'items-end' : 'items-start'}`}>
-                      <div className="flex items-center gap-1 mb-0.5 max-w-full">
-                        <span className="text-[9px] font-semibold text-slate-400 truncate max-w-[100px]">{msg.nome}</span>
-                        {isDocente && (
-                          <span className="text-[7px] bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 px-1 py-0.2 rounded font-black uppercase tracking-wide">
-                            Docente
-                          </span>
-                        )}
-                        <span className="text-[7px] text-slate-500">{msg.timestamp}</span>
-                      </div>
-                      <div className={`px-2.5 py-1.5 rounded-xl text-xs leading-normal max-w-[90%] break-words ${isMe ? 'bg-indigo-650 text-white rounded-tr-none' : 'bg-[#111622] border border-slate-800/80 text-slate-200 rounded-tl-none'}`}>
-                        {msg.text}
-                      </div>
-                    </div>
-                  );
-                })
-              )}
-              <div ref={messagesEndRef} />
-            </div>
+            {activeSidebarTab === 'chat' ? (
+              <>
+                {/* Messages List */}
+                <div className="flex-1 overflow-y-auto p-3 space-y-3">
+                  {messages.length === 0 ? (
+                    <p className="text-[10px] text-slate-500 text-center py-6 leading-relaxed">Nenhuma dúvida enviada ainda.<br />Seja o primeiro a enviar!</p>
+                  ) : (
+                    messages.map(msg => {
+                      const isMe = msg.senderId === user.id;
+                      const isDocente = msg.role === 'professor' || msg.role === 'admin';
+                      return (
+                        <div key={msg.id} className={`flex flex-col ${isMe ? 'items-end' : 'items-start'}`}>
+                          <div className="flex items-center gap-1 mb-0.5 max-w-full">
+                            <span className="text-[9px] font-semibold text-slate-400 truncate max-w-[100px]">{msg.nome}</span>
+                            {isDocente && (
+                              <span className="text-[7px] bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 px-1 py-0.2 rounded font-black uppercase tracking-wide">
+                                Docente
+                              </span>
+                            )}
+                            <span className="text-[7px] text-slate-500">{msg.timestamp}</span>
+                          </div>
+                          <div className={`px-2.5 py-1.5 rounded-xl text-xs leading-normal max-w-[90%] break-words ${isMe ? 'bg-indigo-650 text-white rounded-tr-none' : 'bg-[#111622] border border-slate-800/80 text-slate-200 rounded-tl-none'}`}>
+                            {msg.text}
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                  <div ref={messagesEndRef} />
+                </div>
 
-            {/* Send Input */}
-            <div className="p-2 border-t border-slate-800/70 bg-[#080c17] flex gap-2">
-              <input
-                type="text"
-                value={chatInput}
-                onChange={e => setChatInput(e.target.value)}
-                onKeyDown={e => { if (e.key === 'Enter') sendChatMessage(); }}
-                placeholder="Escreva a sua dúvida..."
-                className="flex-1 min-w-0 px-2.5 py-1.5 bg-[#0e1322] border border-slate-800 rounded-lg focus:outline-none focus:border-slate-700 text-xs text-slate-200 placeholder-slate-500"
-              />
-              <button 
-                onClick={sendChatMessage}
-                className="p-1.5 bg-indigo-650 hover:bg-indigo-700 text-white rounded-lg transition-colors flex items-center justify-center shrink-0"
-              >
-                <Send className="w-3.5 h-3.5" />
-              </button>
-            </div>
+                {/* Send Input */}
+                <div className="p-2 border-t border-slate-800/70 bg-[#080c17] flex gap-2">
+                  <input
+                    type="text"
+                    value={chatInput}
+                    onChange={e => setChatInput(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter') sendChatMessage(); }}
+                    placeholder="Escreva a sua dúvida..."
+                    className="flex-1 min-w-0 px-2.5 py-1.5 bg-[#0e1322] border border-slate-800 rounded-lg focus:outline-none focus:border-slate-700 text-xs text-slate-200 placeholder-slate-500"
+                  />
+                  <button 
+                    onClick={sendChatMessage}
+                    className="p-1.5 bg-indigo-650 hover:bg-indigo-700 text-white rounded-lg transition-colors flex items-center justify-center shrink-0"
+                  >
+                    <Send className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </>
+            ) : (
+              /* Participants List */
+              <div className="flex-1 overflow-y-auto p-3 space-y-2">
+                <span className="text-[9px] uppercase font-bold text-slate-500 tracking-wider block mb-2">Pessoas na Aula ({onlineUsers.length})</span>
+                {onlineUsers.length === 0 ? (
+                  <p className="text-[10px] text-slate-500 text-center py-6">Nenhum participante conectado.</p>
+                ) : (
+                  onlineUsers.map(u => {
+                    const isUserProfessor = u.role === 'professor' || u.role === 'admin'
+                    return (
+                      <div key={u.id} className="flex items-center justify-between p-2 rounded-xl bg-[#111622] border border-slate-800/50">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <div className={`h-2 w-2 rounded-full ${isUserProfessor ? 'bg-indigo-500 animate-pulse' : 'bg-emerald-500'}`} />
+                          <span className="text-xs font-semibold text-slate-200 truncate">{u.nome}</span>
+                          {isUserProfessor && (
+                            <span className="text-[8px] bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 px-1.5 py-0.2 rounded font-black uppercase">
+                              Docente
+                            </span>
+                          )}
+                        </div>
+                        
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          {u.handRaised && (
+                            <span className="text-xs animate-bounce" title="Solicitou a palavra">✋</span>
+                          )}
+                          {u.micAuthorized && (
+                            <span className="text-[8px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-1.5 py-0.2 rounded font-black uppercase">
+                              Microfone
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    )
+                  })
+                )}
+              </div>
+            )}
           </div>
         )}
       </div>

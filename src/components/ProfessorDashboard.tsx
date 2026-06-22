@@ -48,7 +48,8 @@ import {
   Clipboard,
   Check,
   AlertTriangle,
-  Calendar
+  Calendar,
+  Menu
 } from 'lucide-react'
 
 interface ProfessorDashboardProps {
@@ -63,6 +64,7 @@ export default function ProfessorDashboard({ user, logout }: ProfessorDashboardP
   const [allEnrollments, setAllEnrollments] = useState<Inscricao[]>([])
   const [activeLessonDetails, setActiveLessonDetails] = useState<Aula | null>(null)
   const [loading, setLoading] = useState(true)
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false)
 
   // Controle de Abas Administrativas (Sidebar)
   const [activeTab, setActiveTab] = useState<'overview' | 'cursos' | 'aulas' | 'conferencias' | 'exercicios' | 'materiais' | 'matriculas'>('overview')
@@ -596,6 +598,160 @@ export default function ProfessorDashboard({ user, logout }: ProfessorDashboardP
         </div>
       )}
 
+      {/* MOBILE SIDEBAR DRAWER */}
+      {mobileSidebarOpen && (
+        <div className="fixed inset-0 z-50 flex md:hidden">
+          {/* Backdrop */}
+          <div 
+            className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm transition-opacity"
+            onClick={() => setMobileSidebarOpen(false)}
+          />
+          {/* Drawer Content */}
+          <aside className="relative flex flex-col w-72 max-w-[80vw] h-full bg-[#0c1220] border-r border-slate-800 p-6 space-y-6 shadow-2xl animate-fade-in">
+            <button 
+              onClick={() => setMobileSidebarOpen(false)}
+              className="absolute top-4 right-4 p-1.5 rounded-lg bg-slate-900 text-slate-400 hover:text-white border-0 cursor-pointer"
+            >
+              <X className="w-4 h-4" />
+            </button>
+
+            <div className="flex items-center gap-2.5 pb-4 border-b border-slate-800">
+              <Logo height="h-7" />
+              <span className="text-[10px] font-bold bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 px-2 py-0.5 rounded-full uppercase tracking-wider">
+                Docente
+              </span>
+            </div>
+
+            {/* Identificação do Professor */}
+            <div className="bg-[#070b13]/60 p-4 rounded-xl border border-slate-850 space-y-1">
+              <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Professor logado</p>
+              <h4 className="text-xs font-bold text-white truncate">{user.nome}</h4>
+              <p className="text-[10px] text-slate-400 truncate">{user.email}</p>
+            </div>
+
+            <nav className="flex-1 space-y-1.5 text-xs font-semibold">
+              <button
+                onClick={() => {
+                  setActiveTab('overview')
+                  setMobileSidebarOpen(false)
+                }}
+                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all cursor-pointer ${
+                  activeTab === 'overview' 
+                    ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-650/15' 
+                    : 'text-slate-400 hover:bg-slate-800/50 hover:text-white'
+                }`}
+              >
+                <LayoutDashboard className="w-4 h-4" />
+                <span>Visão Geral</span>
+              </button>
+
+              <button
+                onClick={() => {
+                  setActiveTab('cursos')
+                  setMobileSidebarOpen(false)
+                }}
+                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all cursor-pointer ${
+                  activeTab === 'cursos' 
+                    ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-650/15' 
+                    : 'text-slate-400 hover:bg-slate-800/50 hover:text-white'
+                }`}
+              >
+                <BookOpen className="w-4 h-4" />
+                <span>Meus Cursos</span>
+              </button>
+
+              <button
+                onClick={() => {
+                  setActiveTab('aulas')
+                  setMobileSidebarOpen(false)
+                }}
+                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all cursor-pointer ${
+                  activeTab === 'aulas' 
+                    ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-650/15' 
+                    : 'text-slate-400 hover:bg-slate-800/50 hover:text-white'
+                }`}
+              >
+                <Calendar className="w-4 h-4" />
+                <span>Grade de Aulas</span>
+              </button>
+
+              <button
+                onClick={() => {
+                  setActiveTab('conferencias')
+                  setMobileSidebarOpen(false)
+                }}
+                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all cursor-pointer ${
+                  activeTab === 'conferencias' 
+                    ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-650/15' 
+                    : 'text-slate-400 hover:bg-slate-800/50 hover:text-white'
+                }`}
+              >
+                <Video className="w-4 h-4 text-indigo-400" />
+                <span>Conferências (Live)</span>
+              </button>
+
+              <button
+                onClick={() => {
+                  setActiveTab('exercicios')
+                  setMobileSidebarOpen(false)
+                }}
+                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all cursor-pointer ${
+                  activeTab === 'exercicios' 
+                    ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-650/15' 
+                    : 'text-slate-404 hover:bg-slate-800/50 hover:text-white'
+                }`}
+              >
+                <CheckSquare className="w-4 h-4" />
+                <span>Exercícios</span>
+              </button>
+
+              <button
+                onClick={() => {
+                  setActiveTab('materiais')
+                  setMobileSidebarOpen(false)
+                }}
+                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all cursor-pointer ${
+                  activeTab === 'materiais' 
+                    ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-650/15' 
+                    : 'text-slate-404 hover:bg-slate-800/50 hover:text-white'
+                }`}
+              >
+                <FileText className="w-4 h-4" />
+                <span>Materiais PDF</span>
+              </button>
+
+              <button
+                onClick={() => {
+                  setActiveTab('matriculas')
+                  setMobileSidebarOpen(false)
+                }}
+                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all cursor-pointer ${
+                  activeTab === 'matriculas' 
+                    ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-650/15' 
+                    : 'text-slate-404 hover:bg-slate-800/50 hover:text-white'
+                }`}
+              >
+                <Users className="w-4 h-4" />
+                <span>Matrículas ({pendingPaymentsCount})</span>
+              </button>
+            </nav>
+
+            <div className="pt-4 border-t border-slate-800">
+              <button
+                onClick={() => {
+                  logout()
+                  setMobileSidebarOpen(false)
+                }}
+                className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-semibold text-rose-455 hover:bg-rose-500/10 hover:text-rose-400 transition-all cursor-pointer"
+              >
+                <LogOut className="w-4 h-4" />
+                <span>Terminar Sessão</span>
+              </button>
+            </div>
+          </aside>
+        </div>
+      )}
+
       {/* SIDEBAR */}
       <aside className="hidden md:flex flex-col w-64 bg-[#0c1220] border-r border-slate-800 p-6 space-y-6">
         <div className="flex items-center gap-2.5 pb-4 border-b border-slate-800">
@@ -715,6 +871,13 @@ export default function ProfessorDashboard({ user, logout }: ProfessorDashboardP
         {/* HEADER */}
         <header className="bg-[#0c1220] border-b border-slate-800 py-4 px-6 md:px-8 flex items-center justify-between">
           <div className="flex items-center gap-4">
+            <button
+              onClick={() => setMobileSidebarOpen(true)}
+              className="md:hidden p-1.5 bg-slate-800 text-slate-400 hover:text-white rounded-lg cursor-pointer border-0"
+              title="Abrir Menu"
+            >
+              <Menu className="w-4 h-4" />
+            </button>
             {/* Logo Visível apenas no Mobile */}
             <div className="md:hidden">
               <Logo height="h-6" />
