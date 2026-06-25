@@ -11,7 +11,8 @@ import {
   requestEnrollment, 
   Curso, 
   Aula, 
-  Inscricao 
+  Inscricao,
+  isSupabaseConfigured
 } from '@/lib/db'
 import { createClient } from '@/lib/supabase/client'
 import { 
@@ -103,8 +104,7 @@ export default function CourseCheckoutPage() {
 
       if (user && course) {
         // Fluxo Real com Supabase Storage se configurado
-        const configured = !authLoading && user.id !== 'user-aluno-1' && user.id !== 'user-admin-1'
-        if (configured && file) {
+        if (isSupabaseConfigured() && file) {
           const supabase = createClient()
           const fileExt = file.name.split('.').pop()
           const filePath = `${user.id}/${course.id}_${Date.now()}.${fileExt}`

@@ -64,7 +64,9 @@ import {
   Clipboard,
   Check,
   BookOpenCheck,
-  AlertTriangle
+  AlertTriangle,
+  Mail,
+  RefreshCw
 } from 'lucide-react'
 
 export default function AdminDashboard() {
@@ -82,7 +84,7 @@ export default function AdminDashboard() {
   const [loading, setLoading] = useState(true)
 
   // Controle de Abas Administrativas (Sidebar)
-  const [activeTab, setActiveTab] = useState<'overview' | 'pagamentos' | 'cursos' | 'exercicios' | 'usuarios' | 'conferencias'>('overview')
+  const [activeTab, setActiveTab] = useState<'overview' | 'pagamentos' | 'cursos' | 'exercicios' | 'usuarios' | 'conferencias' | 'newsletter'>('overview')
 
   // Visualizador de Comprovativo (Modal)
   const [selectedReceipt, setSelectedReceipt] = useState<string | null>(null)
@@ -134,6 +136,26 @@ export default function AdminDashboard() {
 
   // Feedbacks
   const [actionMessage, setActionMessage] = useState<string | null>(null)
+
+  // Newsletter subscribers
+  const [newsletterSubscribers, setNewsletterSubscribers] = useState<{ id: string; email: string; nome: string | null; subscribed_at: string }[]>([])
+  const [loadingNewsletter, setLoadingNewsletter] = useState(false)
+
+  const loadNewsletterSubscribers = async () => {
+    setLoadingNewsletter(true)
+    try {
+      const supabase = createClient()
+      const { data } = await supabase
+        .from('newsletter_subscribers')
+        .select('*')
+        .order('subscribed_at', { ascending: false })
+      if (data) setNewsletterSubscribers(data)
+    } catch (err) {
+      console.error('Erro ao carregar newsletter:', err)
+    } finally {
+      setLoadingNewsletter(false)
+    }
+  }
 
   const showNotification = (msg: string) => {
     setActionMessage(msg)
@@ -877,6 +899,25 @@ ON CONFLICT (id) DO UPDATE SET role = '${newUserRole}';`
               </span>
               <ChevronRight className="w-3.5 h-3.5 opacity-60" />
             </button>
+
+            <button
+              onClick={() => { setActiveTab('newsletter'); loadNewsletterSubscribers() }}
+              className={`w-full flex items-center justify-between p-3 rounded-xl text-xs font-semibold transition-all ${
+                activeTab === 'newsletter' 
+                  ? 'bg-indigo-500/10 text-indigo-400 border-l-4 border-indigo-500' 
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/30'
+              }`}
+            >
+              <span className="flex items-center gap-2.5">
+                <Mail className="w-4 h-4" />
+                <span>Newsletter</span>
+              </span>
+              {newsletterSubscribers.length > 0 && (
+                <span className="bg-indigo-500/20 text-indigo-400 border border-indigo-500/30 text-[9px] font-bold px-2 py-0.5 rounded-full">
+                  {newsletterSubscribers.length}
+                </span>
+              )}
+            </button>
           </nav>
         </div>
 
@@ -914,6 +955,7 @@ ON CONFLICT (id) DO UPDATE SET role = '${newUserRole}';`
             {activeTab === 'conferencias' && 'Salas de Conferência & Transmissões'}
             {activeTab === 'exercicios' && 'Quizzes Acadêmicos'}
             {activeTab === 'usuarios' && 'Controle de Membros'}
+            {activeTab === 'newsletter' && 'Subscritores da Newsletter'}
           </h2>
           <div className="flex items-center gap-3">
             <span className="text-xs bg-[#0b101d] px-3.5 py-2 border border-slate-800 rounded-xl font-bold flex items-center gap-1.5">
@@ -2335,6 +2377,75 @@ ON CONFLICT (id) DO UPDATE SET role = '${newUserRole}';`
                 </>
               )}
             </div>
+
+          {/* --- VIEW 7: NEWSLETTER SUBSCRIBERS --- */}
+          {activeTab === 'newsletter' && (
+            <div className="space-y-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-sm font-bold text-white">Subscritores da Newsletter</h3>
+                  <p className="text-xs text-slate-400 mt-1">{newsletterSubscribers.length} emails subscritos via landing page.</p>
+                </div>
+                <button
+                  onClick={loadNewsletterSubscribers}
+                  disabled={loadingNewsletter}
+                  className="flex items-center gap-1.5 px-3 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 rounded-xl text-xs font-semibold transition-colors disabled:opacity-50"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${loadingNewsletter ? 'animate-spin' : ''}`} />
+                  Atualizar
+                </button>
+              </div>
+
+              {loadingNewsletter ? (
+                <div className="flex justify-center py-12">
+                  <div className="h-8 w-8 animate-spin rounded-full border-4 border-indigo-500 border-t-transparent" />
+                </div>
+              ) : newsletterSubscribers.length === 0 ? (
+                <div className="text-center py-16 text-slate-500">
+                  <Mail className="w-10 h-10 mx-auto mb-3 opacity-30" />
+                  <p className="text-sm font-semibold">Nenhum subscritor ainda</p>
+                  <p className="text-xs mt-1">Os emails aparecem aqui quando alguém subscrever na landing page.</p>
+                </div>
+              ) : (
+                <div className="bg-[#0b101d] border border-slate-800 rounded-2xl overflow-hidden">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="border-b border-slate-800 bg-[#070b13]">
+                        <th className="text-left p-4 font-bold text-slate-400 uppercase tracking-wider">#</th>
+                        <th className="text-left p-4 font-bold text-slate-400 uppercase tracking-wider">Email</th>
+                        <th className="text-left p-4 font-bold text-slate-400 uppercase tracking-wider hidden sm:table-cell">Nome</th>
+                        <th className="text-left p-4 font-bold text-slate-400 uppercase tracking-wider hidden md:table-cell">Data de Subscrição</th>
+                        <th className="text-right p-4 font-bold text-slate-400 uppercase tracking-wider">Ação</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800/50">
+                      {newsletterSubscribers.map((sub, idx) => (
+                        <tr key={sub.id} className="hover:bg-slate-800/20 transition-colors">
+                          <td className="p-4 text-slate-500 font-mono">{idx + 1}</td>
+                          <td className="p-4">
+                            <span className="font-semibold text-slate-200">{sub.email}</span>
+                          </td>
+                          <td className="p-4 text-slate-400 hidden sm:table-cell">{sub.nome || '—'}</td>
+                          <td className="p-4 text-slate-500 hidden md:table-cell">
+                            {new Date(sub.subscribed_at).toLocaleString('pt-AO', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                          </td>
+                          <td className="p-4 text-right">
+                            <a
+                              href={`mailto:${sub.email}`}
+                              className="inline-flex items-center gap-1 px-2.5 py-1 bg-indigo-500/10 hover:bg-indigo-500/20 border border-indigo-500/20 text-indigo-400 rounded-lg font-semibold transition-colors"
+                            >
+                              <Mail className="w-3 h-3" />
+                              Enviar
+                            </a>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
 
             {/* Footer Modal */}
             <div className="p-4 border-t border-slate-800 bg-[#070b13] flex justify-end">
