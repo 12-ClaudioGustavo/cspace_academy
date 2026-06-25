@@ -951,26 +951,11 @@ function WebRTCLiveRoom({
       activePc = pc
     }
 
-    // Captura o microfone do aluno para chamada de voz bidirecional (mudo por padrão)
-    if (!studentLocalStreamRef.current) {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          audio: {
-            echoCancellation: true,
-            noiseSuppression: true,
-            autoGainControl: true
-          }
-        })
-        studentLocalStreamRef.current = stream
-        const micTrack = stream.getAudioTracks()[0]
-        if (micTrack) {
-          micTrack.enabled = studentMicOnRef.current
-          activePc.addTrack(micTrack, stream)
-        }
-      } catch (err) {
-        console.warn('Microfone do aluno não disponível ou recusado:', err)
-      }
-    } else {
+    // NÃO capturar microfone automaticamente.
+    // O aluno só ativa o microfone manualmente ao clicar em "Pedir para Falar" / "Ativar Microfone".
+    // Se o microfone já foi capturado anteriormente (ex: o aluno já pediu palavra antes),
+    // adiciona a track existente à nova conexão (mas mantém-na muda até autorização).
+    if (studentLocalStreamRef.current) {
       const micTrack = studentLocalStreamRef.current.getAudioTracks()[0]
       if (micTrack) {
         const senders = activePc.getSenders()
@@ -1207,9 +1192,9 @@ function WebRTCLiveRoom({
             )
           )}
 
-          {/* Floating Controls Overlay */}
-          {streamActive && (
-            <div className="absolute top-4 right-4 z-20 flex items-center gap-2">
+          {/* Floating Controls Overlay — sempre visível para permitir ecrã inteiro antes da stream */}
+          <div className="absolute top-4 right-4 z-20 flex items-center gap-2">
+            {streamActive && (
               <button
                 onClick={() => setVideoFit(prev => prev === 'cover' ? 'contain' : 'cover')}
                 title={videoFit === 'cover' ? 'Ajustar vídeo à tela' : 'Preencher tela inteira'}
@@ -1217,15 +1202,15 @@ function WebRTCLiveRoom({
               >
                 {videoFit === 'cover' ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
               </button>
-              <button
-                onClick={toggleFullscreen}
-                title={isFullscreen ? 'Sair do Ecrã Inteiro' : 'Ecrã Inteiro'}
-                className="p-2 bg-slate-900/80 hover:bg-slate-800/90 text-slate-200 hover:text-white border border-slate-700/50 rounded-xl transition-all shadow-lg backdrop-blur-sm"
-              >
-                {isFullscreen ? <Minimize className="w-4 h-4" /> : <Maximize className="w-4 h-4" />}
-              </button>
-            </div>
-          )}
+            )}
+            <button
+              onClick={toggleFullscreen}
+              title={isFullscreen ? 'Sair do Ecrã Inteiro' : 'Ecrã Inteiro'}
+              className="p-2 bg-slate-900/80 hover:bg-slate-800/90 text-slate-200 hover:text-white border border-slate-700/50 rounded-xl transition-all shadow-lg backdrop-blur-sm"
+            >
+              {isFullscreen ? <Minimize className="w-4 h-4" /> : <Maximize className="w-4 h-4" />}
+            </button>
+          </div>
 
           {/* Floating PIP Video overlay */}
           {showPip && (
@@ -1436,9 +1421,21 @@ function WebRTCLiveRoom({
                             <span className="text-xs animate-bounce" title="Solicitou a palavra">✋</span>
                           )}
                           {u.micAuthorized && (
-                            <span className="text-[8px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-1.5 py-0.2 rounded font-black uppercase">
-                              Microfone
-                            </span>
+                            <>
+                              <span className="text-[8px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-1.5 py-0.5 rounded font-black uppercase flex items-center gap-1">
+                                <span className="h-1 w-1 rounded-full bg-emerald-400 animate-ping inline-block" />
+                                A falar
+                              </span>
+                              {isProfessor && (
+                                <button
+                                  onClick={() => handleAuthorizeMic(u.id, false)}
+                                  title="Cortar microfone deste aluno"
+                                  className="p-1 bg-rose-500/15 hover:bg-rose-500/30 text-rose-400 hover:text-rose-300 border border-rose-500/25 rounded-lg transition-all"
+                                >
+                                  <MicOff className="w-3 h-3" />
+                                </button>
+                              )}
+                            </>
                           )}
                         </div>
                       </div>

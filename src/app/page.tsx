@@ -16,7 +16,10 @@ import {
   Award, 
   CreditCard,
   ChevronDown,
-  Lock
+  Lock,
+  Mail,
+  Send,
+  Sparkles
 } from 'lucide-react'
 
 export default function LandingPage() {
@@ -24,6 +27,10 @@ export default function LandingPage() {
   const [courses, setCourses] = useState<Curso[]>([])
   const [loading, setLoading] = useState(true)
   const [activeFaq, setActiveFaq] = useState<number | null>(null)
+
+  // Newsletter states
+  const [newsletterEmail, setNewsletterEmail] = useState('')
+  const [newsletterStatus, setNewsletterStatus] = useState<'idle' | 'loading' | 'success' | 'already' | 'error'>('idle')
 
   useEffect(() => {
     async function loadData() {
@@ -38,6 +45,30 @@ export default function LandingPage() {
     }
     loadData()
   }, [])
+
+  const handleNewsletterSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!newsletterEmail.trim()) return
+    setNewsletterStatus('loading')
+    try {
+      const res = await fetch('/api/newsletter', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: newsletterEmail.trim() })
+      })
+      const data = await res.json()
+      if (res.status === 409 || data.error === 'already_subscribed') {
+        setNewsletterStatus('already')
+      } else if (res.ok) {
+        setNewsletterStatus('success')
+        setNewsletterEmail('')
+      } else {
+        setNewsletterStatus('error')
+      }
+    } catch {
+      setNewsletterStatus('error')
+    }
+  }
 
   const faqs = [
     {
@@ -323,10 +354,90 @@ export default function LandingPage() {
         </div>
       </section>
 
+      {/* ===== SECÇÃO NEWSLETTER ===== */}
+      <section id="newsletter" className="py-20 border-t border-slate-200 dark:border-slate-800 relative overflow-hidden">
+        {/* Background glow */}
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-none opacity-20 dark:opacity-15">
+          <div className="w-[600px] h-[300px] bg-gradient-to-r from-indigo-500 to-cyan-500 rounded-full blur-[100px]" />
+        </div>
+
+        <div className="relative z-10 mx-auto max-w-2xl px-6 sm:px-8 text-center">
+          <div className="inline-flex items-center gap-2 rounded-full bg-indigo-50 dark:bg-indigo-950/50 border border-indigo-200/50 dark:border-indigo-800/30 px-4 py-1.5 mb-6">
+            <Sparkles className="h-3.5 w-3.5 text-indigo-500" />
+            <span className="text-xs font-semibold text-indigo-700 dark:text-indigo-300">Newsletter C-Space Academy</span>
+          </div>
+
+          <h2 className="text-3xl font-extrabold tracking-tight text-slate-900 dark:text-white sm:text-4xl">
+            Fique por dentro das{' '}
+            <span className="bg-gradient-to-r from-indigo-600 to-cyan-500 bg-clip-text text-transparent">
+              novidades
+            </span>
+          </h2>
+          <p className="mt-4 text-slate-600 dark:text-slate-300 text-sm leading-relaxed">
+            Receba em primeira mão alertas de novas turmas, datas de live, conteúdos gratuitos e promoções exclusivas para assinantes.
+          </p>
+
+          {newsletterStatus === 'success' ? (
+            <div className="mt-8 flex flex-col items-center gap-3 p-6 bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/50 rounded-2xl">
+              <CheckCircle2 className="h-10 w-10 text-emerald-500" />
+              <p className="text-sm font-semibold text-emerald-700 dark:text-emerald-400">Subscrito com sucesso! 🎉</p>
+              <p className="text-xs text-emerald-600 dark:text-emerald-500">Receberá as novidades da C-Space Academy em primeira mão.</p>
+            </div>
+          ) : newsletterStatus === 'already' ? (
+            <div className="mt-8 flex flex-col items-center gap-3 p-6 bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800/40 rounded-2xl">
+              <Mail className="h-10 w-10 text-amber-500" />
+              <p className="text-sm font-semibold text-amber-700 dark:text-amber-400">Este email já está subscrito!</p>
+              <p className="text-xs text-amber-600 dark:text-amber-500">Já receberá as nossas novidades. Obrigado por fazer parte da comunidade.</p>
+            </div>
+          ) : (
+            <form onSubmit={handleNewsletterSubmit} className="mt-8 flex flex-col sm:flex-row gap-3 max-w-md mx-auto">
+              <div className="relative flex-1">
+                <span className="absolute inset-y-0 left-0 pl-4 flex items-center text-slate-400 pointer-events-none">
+                  <Mail className="h-4 w-4" />
+                </span>
+                <input
+                  type="email"
+                  required
+                  value={newsletterEmail}
+                  onChange={(e) => setNewsletterEmail(e.target.value)}
+                  placeholder="O seu melhor email..."
+                  className="block w-full pl-11 pr-4 py-3 bg-white dark:bg-slate-900/80 border border-slate-200 dark:border-slate-700 rounded-xl text-sm focus:outline-none focus:border-indigo-500 dark:focus:border-cyan-500 text-slate-800 dark:text-slate-200 placeholder-slate-400 transition-colors shadow-sm"
+                />
+              </div>
+              <button
+                type="submit"
+                disabled={newsletterStatus === 'loading'}
+                className="inline-flex items-center justify-center gap-2 h-12 px-6 bg-gradient-to-r from-indigo-600 to-cyan-500 text-white rounded-xl font-semibold text-sm hover:from-indigo-700 hover:to-cyan-600 shadow-lg transition-all disabled:opacity-60 whitespace-nowrap"
+              >
+                {newsletterStatus === 'loading' ? (
+                  <div className="h-4 w-4 rounded-full border-2 border-white border-t-transparent animate-spin" />
+                ) : (
+                  <Send className="h-4 w-4" />
+                )}
+                <span>{newsletterStatus === 'loading' ? 'Enviando...' : 'Subscrever'}</span>
+              </button>
+            </form>
+          )}
+
+          {newsletterStatus === 'error' && (
+            <p className="mt-3 text-xs text-rose-500">Ocorreu um erro. Tente novamente.</p>
+          )}
+
+          <p className="mt-4 text-[11px] text-slate-400">
+            Sem spam. Cancelamento a qualquer momento. Os seus dados estão seguros.
+          </p>
+        </div>
+      </section>
+
       {/* Footer */}
       <footer className="mt-auto border-t border-slate-200 dark:border-slate-800 py-10 bg-white dark:bg-[#070b13] transition-colors">
         <div className="mx-auto max-w-7xl px-6 sm:px-8 flex flex-col sm:flex-row items-center justify-between gap-6 text-slate-500 dark:text-slate-400 text-xs">
           <Logo height="h-6 sm:h-7 md:h-8" />
+          <div className="flex items-center gap-6">
+            <Link href="/recuperar-senha" className="hover:text-indigo-500 transition-colors">Recuperar Senha</Link>
+            <Link href="/cadastro" className="hover:text-indigo-500 transition-colors">Cadastrar</Link>
+            <Link href="/login" className="hover:text-indigo-500 transition-colors">Login</Link>
+          </div>
           <p>© {new Date().getFullYear()} C-Space Technologies. Todos os direitos reservados.</p>
         </div>
       </footer>

@@ -6,7 +6,7 @@ import { useRouter } from 'next/navigation'
 import { useAuth } from '@/context/AuthContext'
 import { createClient } from '@/lib/supabase/client'
 import { Logo } from '@/components/Logo'
-import { User, Mail, Lock, AlertCircle, ArrowRight } from 'lucide-react'
+import { User, Mail, Lock, AlertCircle, ArrowRight, CheckCircle2, RefreshCw } from 'lucide-react'
 
 export default function RegisterPage() {
   const { isDemo, refreshUser } = useAuth()
@@ -17,6 +17,9 @@ export default function RegisterPage() {
   const [confirmPassword, setConfirmPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
+  const [awaitingConfirmation, setAwaitingConfirmation] = useState(false)
+  const [resending, setResending] = useState(false)
+  const [resent, setResent] = useState(false)
 
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -24,6 +27,10 @@ export default function RegisterPage() {
 
     if (password !== confirmPassword) {
       setError('As palavras-passe não coincidem.')
+      return
+    }
+    if (password.length < 6) {
+      setError('A palavra-passe deve ter pelo menos 6 caracteres.')
       return
     }
 
@@ -49,14 +56,14 @@ export default function RegisterPage() {
     // Cadastro Real com Supabase
     try {
       const supabase = createClient()
-      const { data, error: authError } = await supabase.auth.signUp({
+      const { error: authError } = await supabase.auth.signUp({
         email,
         password,
         options: {
           emailRedirectTo: 'https://cspace-academy.vercel.app/',
           data: {
             nome: nome,
-            role: 'aluno' // Cadastrado por padrão como aluno
+            role: 'aluno'
           }
         }
       })
@@ -64,14 +71,114 @@ export default function RegisterPage() {
       if (authError) {
         setError(authError.message)
       } else {
-        await refreshUser()
-        router.push('/dashboard')
+        // Mostra ecrã de confirmação de email
+        setAwaitingConfirmation(true)
       }
     } catch (err: any) {
       setError(err.message || 'Ocorreu um erro inesperado.')
     } finally {
       setLoading(false)
     }
+  }
+
+  const handleResend = async () => {
+    setResending(true)
+    setResent(false)
+    try {
+      const supabase = createClient()
+      await supabase.auth.resend({
+        type: 'signup',
+        email,
+        options: {
+          emailRedirectTo: 'https://cspace-academy.vercel.app/'
+        }
+      })
+      setResent(true)
+      setTimeout(() => setResent(false), 5000)
+    } catch (err) {
+      console.error('Erro ao reenviar email:', err)
+    } finally {
+      setResending(false)
+    }
+  }
+
+  // Ecrã de confirmação de email
+  if (awaitingConfirmation) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[#070b13] px-6 py-12 font-sans">
+        <div className="absolute inset-0 z-0 flex items-center justify-center opacity-15 pointer-events-none">
+          <div className="w-[400px] h-[400px] bg-gradient-to-tr from-indigo-600 to-cyan-500 rounded-full blur-[120px]" />
+        </div>
+
+        <div className="relative z-10 w-full max-w-md">
+          <div className="flex flex-col items-center mb-8">
+            <Link href="/" className="mb-3">
+              <Logo height="h-10 sm:h-12" />
+            </Link>
+          </div>
+
+          <div className="bg-[#0c1220] rounded-2xl border border-slate-800 shadow-2xl p-8 text-center space-y-6">
+            {/* Ícone animado */}
+            <div className="relative flex items-center justify-center mx-auto w-20 h-20">
+              <div className="absolute inset-0 rounded-full bg-indigo-500/10 border border-indigo-500/20 animate-ping" style={{ animationDuration: '2s' }} />
+              <div className="relative flex h-16 w-16 items-center justify-center rounded-full bg-indigo-500/15 border border-indigo-500/25">
+                <Mail className="w-7 h-7 text-indigo-400" />
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <h2 className="text-xl font-bold text-white">Confirme o seu email</h2>
+              <p className="text-sm text-slate-400 leading-relaxed">
+                Enviámos um link de confirmação para{' '}
+                <strong className="text-white">{email}</strong>.{' '}
+                Clique no link para ativar a sua conta.
+              </p>
+            </div>
+
+            <div className="p-4 bg-slate-900/60 rounded-xl border border-slate-800 text-left space-y-2 text-xs text-slate-400">
+              <div className="flex items-start gap-2">
+                <span className="text-indigo-400 mt-0.5">①</span>
+                <span>Abra o seu email em <strong className="text-slate-300">{email}</strong></span>
+              </div>
+              <div className="flex items-start gap-2">
+                <span className="text-indigo-400 mt-0.5">②</span>
+                <span>Procure um email da <strong className="text-slate-300">C-Space Academy</strong> (verifique o spam)</span>
+              </div>
+              <div className="flex items-start gap-2">
+                <span className="text-indigo-400 mt-0.5">③</span>
+                <span>Clique em <strong className="text-slate-300">"Confirmar email"</strong> para ativar a conta</span>
+              </div>
+            </div>
+
+            {/* Botão reenviar */}
+            <div className="space-y-3 pt-1">
+              {resent ? (
+                <div className="flex items-center justify-center gap-2 text-emerald-400 text-sm font-semibold">
+                  <CheckCircle2 className="w-4 h-4" />
+                  Email reenviado!
+                </div>
+              ) : (
+                <button
+                  onClick={handleResend}
+                  disabled={resending}
+                  className="w-full py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-sm font-semibold transition-colors border border-slate-700 flex items-center justify-center gap-2 disabled:opacity-50"
+                >
+                  <RefreshCw className={`w-4 h-4 ${resending ? 'animate-spin' : ''}`} />
+                  {resending ? 'Reenviando...' : 'Reenviar Email de Confirmação'}
+                </button>
+              )}
+
+              <Link
+                href="/login"
+                className="flex items-center justify-center gap-1.5 w-full py-2.5 text-sm font-semibold text-slate-400 hover:text-indigo-400 transition-colors"
+              >
+                Já confirmei, ir para o Login
+              </Link>
+            </div>
+          </div>
+        </div>
+      </div>
+    )
   }
 
   return (

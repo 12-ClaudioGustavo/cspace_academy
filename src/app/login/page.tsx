@@ -129,9 +129,9 @@ export default function LoginPage() {
               <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
                 Palavra-passe
               </label>
-              <a href="#" className="text-[10px] font-semibold text-indigo-600 dark:text-cyan-400 hover:underline">
+              <Link href="/recuperar-senha" className="text-[10px] font-semibold text-indigo-600 dark:text-cyan-400 hover:underline">
                 Esqueceu a palavra-passe?
-              </a>
+              </Link>
             </div>
             <div className="relative">
               <span className="absolute inset-y-0 left-0 pl-3.5 flex items-center text-slate-400">
