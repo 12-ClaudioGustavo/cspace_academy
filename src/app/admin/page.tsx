@@ -23,10 +23,12 @@ import {
   getAllProfiles,
   updateProfileRole,
   deleteProfile,
+  truncateProfiles,
   getAllEnrollments,
   getEnrollments,
   getExerciseResponses,
   getAllExercises,
+  removeEnrollment,
   registerUserMock,
   isSupabaseConfigured,
   createMaterial,
@@ -115,6 +117,7 @@ export default function AdminDashboard() {
   const [cursoTitulo, setCursoTitulo] = useState('')
   const [cursoDescricao, setCursoDescricao] = useState('')
   const [cursoPreco, setCursoPreco] = useState('')
+  const [cursoIsFree, setCursoIsFree] = useState(false)
   const [cursoCapa, setCursoCapa] = useState('')
   const [cursoPublicado, setCursoPublicado] = useState(true)
   const [cursoProfessorId, setCursoProfessorId] = useState('')
@@ -530,6 +533,24 @@ ON CONFLICT (id) DO UPDATE SET role = '${newUserRole}';`
     }
   }
 
+  // Remover Aluno do Curso
+  const handleRemoveFromCourse = async (enrollmentId: string, studentId: string) => {
+    if (!confirm('Deseja realmente remover este aluno do curso?')) return
+    try {
+      const success = await removeEnrollment(enrollmentId)
+      if (success) {
+        setStudentEnrollments(prev => prev.filter(e => e.id !== enrollmentId))
+        setAllEnrollments(prev => prev.filter(e => e.id !== enrollmentId))
+        showNotification('Aluno removido do curso com sucesso.')
+      } else {
+        showNotification('Erro ao remover o aluno do curso.')
+      }
+    } catch (err: any) {
+      console.error(err)
+      showNotification(err.message || 'Erro ao remover aluno.')
+    }
+  }
+
   // Excluir Perfil de Usuário
   const handleDeleteUser = async (userId: string) => {
     if (!confirm('Deseja realmente remover este perfil? O acesso do usuário ao sistema será revogado.')) return
@@ -541,6 +562,21 @@ ON CONFLICT (id) DO UPDATE SET role = '${newUserRole}';`
       }
     } catch (err) {
       console.error(err)
+    }
+  }
+
+  // Limpar alunos e professores (Truncate)
+  const handleTruncateUsers = async () => {
+    if (!confirm('ATENÇÃO: Isso excluirá permanentemente todos os alunos e professores cadastrados no sistema, incluindo o acesso deles na autenticação. Deseja prosseguir?')) return
+    try {
+      const success = await truncateProfiles()
+      if (success) {
+        setProfiles(prev => prev.filter(p => p.role === 'admin'))
+        showNotification('Truncate concluído. Todos os alunos e professores foram excluídos.')
+      }
+    } catch (err: any) {
+      console.error(err)
+      showNotification(err.message || 'Erro ao realizar truncate.')
     }
   }
 
@@ -566,12 +602,12 @@ ON CONFLICT (id) DO UPDATE SET role = '${newUserRole}';`
   // Salvar Curso (com professor atribuído)
   const handleSaveCourse = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!cursoTitulo || !cursoPreco) return
+    if (!cursoTitulo || (!cursoIsFree && !cursoPreco)) return
 
     const payload = {
       titulo: cursoTitulo,
       descricao: cursoDescricao,
-      preco: parseFloat(cursoPreco),
+      preco: cursoIsFree ? 0 : parseFloat(cursoPreco),
       capa_url: cursoCapa || 'https://images.unsplash.com/photo-1517694712202-14dd9538aa97?auto=format&fit=crop&w=600&q=80',
       publicado: cursoPublicado,
       professor_id: cursoProfessorId || null
@@ -598,6 +634,7 @@ ON CONFLICT (id) DO UPDATE SET role = '${newUserRole}';`
       setCursoCapa('')
       setCursoPublicado(true)
       setCursoProfessorId('')
+      setCursoIsFree(false)
     } catch (err: any) {
       console.error(err)
       showNotification(err?.message || 'Erro ao processar curso.')
@@ -612,6 +649,7 @@ ON CONFLICT (id) DO UPDATE SET role = '${newUserRole}';`
     setCursoCapa(c.capa_url)
     setCursoPublicado(c.publicado)
     setCursoProfessorId(c.professor_id || '')
+    setCursoIsFree(c.preco === 0)
   }
 
   const handleDeleteCourseClick = async (id: string) => {
@@ -787,7 +825,7 @@ ON CONFLICT (id) DO UPDATE SET role = '${newUserRole}';`
   }
 
   return (
-    <div className="min-h-screen bg-[#070b13] text-slate-100 flex flex-col md:flex-row">
+    <div className="h-screen overflow-hidden bg-[#070b13] text-slate-100 flex flex-col md:flex-row">
       
       {/* 1. SIDEBAR DE NAVEGAÇÃO */}
       <aside className="w-full md:w-64 bg-[#0b101d] border-b md:border-b-0 md:border-r border-slate-800/80 flex flex-col justify-between shrink-0">
@@ -1257,16 +1295,35 @@ ON CONFLICT (id) DO UPDATE SET role = '${newUserRole}';`
                         className="block w-full px-3 py-2.5 bg-[#070b13] border border-slate-800 rounded-xl focus:outline-none focus:border-indigo-500 text-slate-200"
                       />
                     </div>
+                    <div className="flex items-center gap-2 py-1">
+                      <input
+                        type="checkbox"
+                        id="cursoIsFree"
+                        checked={cursoIsFree}
+                        onChange={(e) => {
+                          setCursoIsFree(e.target.checked)
+                          if (e.target.checked) {
+                            setCursoPreco('0')
+                          } else if (cursoPreco === '0') {
+                            setCursoPreco('')
+                          }
+                        }}
+                        className="rounded border-slate-800 text-indigo-650 focus:ring-indigo-500 bg-[#070b13]"
+                      />
+                      <label htmlFor="cursoIsFree" className="font-semibold text-slate-400 uppercase cursor-pointer text-xs">Este curso é gratuito</label>
+                    </div>
+
                     <div className="grid gap-4 sm:grid-cols-2">
                       <div>
                         <label className="block font-semibold text-slate-400 mb-1.5 uppercase">Preço (Kwanzas)</label>
                         <input
                           type="number"
-                          required
-                          value={cursoPreco}
+                          required={!cursoIsFree}
+                          disabled={cursoIsFree}
+                          value={cursoIsFree ? '0' : cursoPreco}
                           onChange={(e) => setCursoPreco(e.target.value)}
                           placeholder="25000"
-                          className="block w-full px-3 py-2.5 bg-[#070b13] border border-slate-800 rounded-xl focus:outline-none focus:border-indigo-500 text-slate-200"
+                          className="block w-full px-3 py-2.5 bg-[#070b13] border border-slate-800 rounded-xl focus:outline-none focus:border-indigo-500 text-slate-200 disabled:opacity-50 disabled:cursor-not-allowed"
                         />
                       </div>
                       <div className="space-y-2">
@@ -1881,16 +1938,25 @@ ON CONFLICT (id) DO UPDATE SET role = '${newUserRole}';`
                   <h3 className="text-base font-bold text-white uppercase tracking-wider">Membros da C-Space Academy</h3>
                   <p className="text-[10px] text-slate-400 mt-1">Gerencie os alunos, professores e administradores do sistema.</p>
                 </div>
-                <button
-                  onClick={() => {
-                    setNewUserName(''); setNewUserEmail(''); setNewUserPassword(''); setNewUserRole('professor'); setNewUserError(null); setFallbackSql(null);
-                    setIsRegisterModalOpen(true);
-                  }}
-                  className="px-4 py-2 bg-indigo-650 hover:bg-indigo-700 text-white rounded-xl font-bold text-xs flex items-center gap-2 shadow-lg transition-all"
-                >
-                  <PlusCircle className="w-4 h-4" />
-                  <span>Cadastrar Membro</span>
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={handleTruncateUsers}
+                    className="px-4 py-2 bg-rose-600/10 hover:bg-rose-600/20 border border-rose-500/20 text-rose-400 rounded-xl font-bold text-xs flex items-center gap-2 shadow-lg transition-all"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                    <span>Limpar Alunos e Professores (Truncate)</span>
+                  </button>
+                  <button
+                    onClick={() => {
+                      setNewUserName(''); setNewUserEmail(''); setNewUserPassword(''); setNewUserRole('professor'); setNewUserError(null); setFallbackSql(null);
+                      setIsRegisterModalOpen(true);
+                    }}
+                    className="px-4 py-2 bg-indigo-650 hover:bg-indigo-700 text-white rounded-xl font-bold text-xs flex items-center gap-2 shadow-lg transition-all"
+                  >
+                    <PlusCircle className="w-4 h-4" />
+                    <span>Cadastrar Membro</span>
+                  </button>
+                </div>
               </div>
 
               {/* Roster de Membros Registrados */}
@@ -2291,13 +2357,21 @@ ON CONFLICT (id) DO UPDATE SET role = '${newUserRole}';`
                           <div key={enroll.id} className="p-4 bg-[#070b13] border border-slate-800 rounded-xl space-y-4">
                             <div className="flex justify-between items-center border-b border-slate-850 pb-2">
                               <span className="font-bold text-slate-200 text-xs">{enroll.curso?.titulo}</span>
-                              <span className={`text-[9px] font-bold uppercase px-2 py-0.5 rounded border ${
-                                enroll.status === 'aprovado' 
-                                  ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' 
-                                  : 'bg-yellow-500/10 border-yellow-500/20 text-yellow-400'
-                              }`}>
-                                Matrícula: {enroll.status}
-                              </span>
+                               <div className="flex items-center gap-2">
+                                <span className={`text-[9px] font-bold uppercase px-2 py-0.5 rounded border ${
+                                  enroll.status === 'aprovado' 
+                                    ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' 
+                                    : 'bg-yellow-500/10 border-yellow-500/20 text-yellow-400'
+                                }`}>
+                                  Matrícula: {enroll.status}
+                                </span>
+                                <button
+                                  onClick={() => handleRemoveFromCourse(enroll.id, selectedStudent!.id)}
+                                  className="px-2 py-0.5 bg-rose-600/10 border border-rose-500/20 hover:bg-rose-600/30 text-rose-400 rounded text-[9px] font-bold uppercase transition-all"
+                                >
+                                  Remover do Curso
+                                </button>
+                              </div>
                             </div>
 
                             {/* Timeline de Aulas */}

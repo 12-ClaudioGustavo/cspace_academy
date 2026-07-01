@@ -468,6 +468,22 @@ export const rejectEnrollment = async (enrollmentId: string): Promise<boolean> =
   return false
 }
 
+export const removeEnrollment = async (enrollmentId: string): Promise<boolean> => {
+  if (isSupabaseConfigured()) {
+    const supabase = createBrowserClient()
+    const { error } = await supabase
+      .from('inscricoes')
+      .delete()
+      .eq('id', enrollmentId)
+    return !error
+  }
+
+  const list = getLocalStorageData<Inscricao[]>('cspace_enrollments', [])
+  const filtered = list.filter(item => item.id !== enrollmentId)
+  saveLocalStorageData('cspace_enrollments', filtered)
+  return true
+}
+
 // Exercícios Respostas
 export const getExerciseResponses = async (userId: string): Promise<RespostaExercicio[]> => {
   if (isSupabaseConfigured()) {
@@ -704,11 +720,12 @@ export const updateProfileRole = async (userId: string, role: 'admin' | 'profess
 
 export const deleteProfile = async (userId: string): Promise<boolean> => {
   if (isSupabaseConfigured()) {
-    const supabase = createBrowserClient()
-    const { error } = await supabase.from('perfis').delete().eq('id', userId)
-    if (error) {
-      console.error("Error deleting profile:", error)
-      throw new Error(error.message || "Erro ao excluir perfil no banco de dados.")
+    const res = await fetch(`/api/admin/users?userId=${userId}`, {
+      method: 'DELETE'
+    })
+    if (!res.ok) {
+      const errData = await res.json()
+      throw new Error(errData.error || "Erro ao excluir perfil no banco de dados.")
     }
     return true
   }
@@ -721,6 +738,26 @@ export const deleteProfile = async (userId: string): Promise<boolean> => {
   }
   return false
 }
+
+export const truncateProfiles = async (): Promise<boolean> => {
+  if (isSupabaseConfigured()) {
+    const res = await fetch('/api/admin/users?action=truncate', {
+      method: 'DELETE'
+    })
+    if (!res.ok) {
+      const errData = await res.json()
+      throw new Error(errData.error || "Erro ao realizar truncate de utilizadores.")
+    }
+    return true
+  }
+  
+  // Limpar localStorage no modo demo
+  const list = getLocalStorageData<Perfil[]>('cspace_profiles', [])
+  const filtered = list.filter(p => p.role === 'admin')
+  saveLocalStorageData('cspace_profiles', filtered)
+  return true
+}
+
 
 export const getAllEnrollments = async (): Promise<Inscricao[]> => {
   if (isSupabaseConfigured()) {

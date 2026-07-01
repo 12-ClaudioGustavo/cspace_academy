@@ -163,7 +163,7 @@ export default function StudentDashboard({ user, enrollments, catalog, logout }:
   )
 
   return (
-    <div className="min-h-screen bg-[#070b13] text-slate-100 flex font-sans">
+    <div className="h-screen overflow-hidden bg-[#070b13] text-slate-100 flex font-sans">
       
       {/* MOBILE SIDEBAR DRAWER */}
       {mobileSidebarOpen && (
@@ -713,7 +713,7 @@ export default function StudentDashboard({ user, enrollments, catalog, logout }:
                         <img src={course.capa_url} alt={course.titulo} className="w-full h-full object-cover" />
                         <div className="absolute inset-0 bg-[#070b13]/30" />
                         <span className="absolute bottom-3 left-3 bg-indigo-600 text-white font-black text-[9px] px-2 py-0.5 rounded shadow-lg uppercase tracking-wider">
-                          {course.preco.toLocaleString()} AOA
+                          {course.preco > 0 ? `${course.preco.toLocaleString()} AOA` : 'Gratuito'}
                         </span>
                       </div>
 

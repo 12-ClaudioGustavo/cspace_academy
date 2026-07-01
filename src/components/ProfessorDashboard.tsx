@@ -586,7 +586,7 @@ export default function ProfessorDashboard({ user, logout }: ProfessorDashboardP
   }
 
   return (
-    <div className="min-h-screen bg-[#070b13] text-slate-100 flex font-sans">
+    <div className="h-screen overflow-hidden bg-[#070b13] text-slate-100 flex font-sans">
       
       {/* NOTIFICAÇÃO TOAST */}
       {notification && (

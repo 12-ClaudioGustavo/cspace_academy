@@ -6,7 +6,8 @@ import { createClient } from '@/lib/supabase/client'
 import { 
   Video, VideoOff, Mic, MicOff, Monitor, StopCircle, 
   Play, Users, Shield, AlertCircle, RefreshCw, ExternalLink,
-  MessageSquare, Send, X, Maximize, Minimize, Maximize2, Minimize2
+  MessageSquare, Send, X, Maximize, Minimize, Maximize2, Minimize2,
+  UserMinus
 } from 'lucide-react'
 
 export interface PresentUser {
@@ -158,6 +159,8 @@ function WebRTCLiveRoom({
   // Identificadores de Sessão de Conexão para evitar condições de corrida (Race Conditions)
   const connectionIdsRef = useRef<{ [key: string]: string }>({})
   const connectionIdRef = useRef<string | null>(null)
+  const [kicked, setKicked] = useState(false)
+  const activeStudentTracksRef = useRef<{ [studentId: string]: MediaStreamTrack }>({})
   
   // Filas para guardar candidatos ICE recebidos antes do remoteDescription estar definido
   const studentQueuedCandidatesRef = useRef<RTCIceCandidateInit[]>([])
@@ -369,6 +372,14 @@ function WebRTCLiveRoom({
       }
     })
 
+    channel.on('broadcast', { event: 'kick-student' }, ({ payload }) => {
+      const { targetId } = payload
+      if (!isProfessor && targetId === user.id) {
+        setKicked(true)
+        cleanupWebRTC()
+      }
+    })
+
     // Presença: rastrear quem está online na sala
     channel.on('presence', { event: 'sync' }, () => {
       const presenceState = channel.presenceState()
@@ -390,6 +401,20 @@ function WebRTCLiveRoom({
       })
       setOnlineStudents(names.filter(n => n !== user.nome))
       setOnlineUsers(usersList)
+
+      // Se for professor, remove quem saiu da sala
+      if (isProfessor) {
+        Object.keys(pcsRef.current).forEach(id => {
+          if (!presenceState[id]) {
+            pcsRef.current[id].close()
+            delete pcsRef.current[id]
+            delete connectionIdsRef.current[id]
+            delete activeStudentTracksRef.current[id]
+            const audioEl = document.getElementById(`audio-student-${id}`)
+            if (audioEl) audioEl.remove()
+          }
+        })
+      }
 
       // Se for professor e a live estiver ativa, iniciar conexão com quem não tiver conexão ativa
       if (isProfessor && streamActiveRef.current && localStreamRef.current) {
@@ -449,11 +474,15 @@ function WebRTCLiveRoom({
     })
     pcsRef.current = {}
     
-    // Fecha conexão do Estudante
+    // Fecha conexão do Estudante e remove elementos de áudio
     if (pcRef.current) {
       pcRef.current.close()
       pcRef.current = null
     }
+    
+    // Remove todos os elementos de áudio dinâmicos criados
+    const audios = document.querySelectorAll('audio[id^="audio-track-"]')
+    audios.forEach(el => el.remove())
     
     const profAudioEl = document.getElementById('professor-audio')
     if (profAudioEl) profAudioEl.remove()
@@ -495,6 +524,63 @@ function WebRTCLiveRoom({
     }
   }
 
+  // Encaminhar track de áudio de um aluno para todos os outros
+  const forwardAudioTrackToOtherStudents = (speakingStudentId: string, track: MediaStreamTrack) => {
+    activeStudentTracksRef.current[speakingStudentId] = track
+
+    Object.entries(pcsRef.current).forEach(async ([studentId, pc]) => {
+      if (studentId !== speakingStudentId && pc && pc.connectionState !== 'closed') {
+        try {
+          const senders = pc.getSenders()
+          const alreadyAdded = senders.some(s => s.track === track)
+          if (!alreadyAdded) {
+            pc.addTrack(track)
+            
+            const connId = connectionIdsRef.current[studentId]
+            const offer = await pc.createOffer()
+            await pc.setLocalDescription(offer)
+            
+            if (channelRef.current) {
+              channelRef.current.send({
+                type: 'broadcast',
+                event: 'webrtc-signal',
+                payload: {
+                  targetId: studentId,
+                  senderId: user.id,
+                  type: 'offer',
+                  connectionId: connId,
+                  data: offer
+                }
+              })
+            }
+          }
+        } catch (err) {
+          console.error(`[WebRTC] Erro ao encaminhar áudio de ${speakingStudentId} para ${studentId}:`, err)
+        }
+      }
+    })
+  }
+
+  // Expulsar aluno da conferência ativa
+  const handleKickStudent = (studentId: string) => {
+    if (!confirm('Deseja realmente expulsar este aluno da videoconferência ativa?')) return
+    if (channelRef.current) {
+      channelRef.current.send({
+        type: 'broadcast',
+        event: 'kick-student',
+        payload: { targetId: studentId }
+      })
+      if (pcsRef.current[studentId]) {
+        pcsRef.current[studentId].close()
+        delete pcsRef.current[studentId]
+      }
+      const audioEl = document.getElementById(`audio-student-${studentId}`)
+      if (audioEl) audioEl.remove()
+      
+      delete activeStudentTracksRef.current[studentId]
+    }
+  }
+
   const initiateConnectionToStudent = async (studentId: string, stream: MediaStream) => {
     if (pcsRef.current[studentId]) {
       pcsRef.current[studentId].close()
@@ -511,6 +597,17 @@ function WebRTCLiveRoom({
 
     // Adiciona tracks locais de camera e áudio
     stream.getTracks().forEach(track => pc.addTrack(track, stream))
+
+    // Adiciona tracks de outros alunos que estejam a falar no momento
+    Object.entries(activeStudentTracksRef.current).forEach(([otherStudentId, otherTrack]) => {
+      if (otherStudentId !== studentId) {
+        try {
+          pc.addTrack(otherTrack)
+        } catch (err) {
+          console.error(`[WebRTC] Erro ao adicionar track de ${otherStudentId} para ${studentId}:`, err)
+        }
+      }
+    })
 
     // Escuta áudio do aluno (chamada de voz bidirecional)
     pc.ontrack = (event) => {
@@ -536,6 +633,9 @@ function WebRTCLiveRoom({
           document.addEventListener('click', resumeAudio)
           document.addEventListener('keydown', resumeAudio)
         })
+
+        // Encaminha áudio deste aluno para todos os outros
+        forwardAudioTrackToOtherStudents(studentId, remoteTrack)
       }
     }
 
@@ -920,18 +1020,19 @@ function WebRTCLiveRoom({
         
         const remoteTrack = event.track
         if (remoteTrack && remoteTrack.kind === 'audio') {
-          let audioEl = document.getElementById('professor-audio') as HTMLAudioElement
+          const trackId = remoteTrack.id
+          let audioEl = document.getElementById(`audio-track-${trackId}`) as HTMLAudioElement
           if (!audioEl) {
             audioEl = document.createElement('audio')
-            audioEl.id = 'professor-audio'
+            audioEl.id = `audio-track-${trackId}`
             audioEl.autoplay = true
             document.body.appendChild(audioEl)
           }
           audioEl.srcObject = new MediaStream([remoteTrack])
           audioEl.play().catch(e => {
-            console.warn('Autoplay do áudio do professor bloqueado:', e)
+            console.warn('Autoplay do áudio remoto bloqueado:', e)
             const resumeAudio = () => {
-              audioEl.play().catch(err => console.error('Erro ao reproduzir áudio do professor:', err))
+              audioEl.play().catch(err => console.error('Erro ao reproduzir áudio remoto:', err))
               document.removeEventListener('click', resumeAudio)
               document.removeEventListener('keydown', resumeAudio)
             }
@@ -1089,6 +1190,28 @@ function WebRTCLiveRoom({
   }
 
   const showPip = isProfessor ? (streamActive && sharingScreen && cameraOn) : (streamActive && remoteTracks.length >= 2);
+
+  if (kicked) {
+    return (
+      <div className="flex flex-col items-center justify-center p-8 bg-rose-950/20 border border-rose-900/50 rounded-2xl text-center space-y-4 max-w-md mx-auto my-12">
+        <div className="bg-rose-500/10 p-3 rounded-full text-rose-500 border border-rose-500/20">
+          <AlertCircle className="w-8 h-8" />
+        </div>
+        <h3 className="text-sm font-black text-white uppercase tracking-wider">Acesso Revogado</h3>
+        <p className="text-xs text-slate-400 leading-relaxed">
+          Você foi removido desta transmissão ativa pelo professor por perturbar ou violar as diretrizes da aula.
+        </p>
+        <button
+          onClick={() => {
+            window.location.reload()
+          }}
+          className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-xl text-xs font-semibold"
+        >
+          Voltar
+        </button>
+      </div>
+    )
+  }
 
   return (
     <div className="w-full bg-slate-950 rounded-2xl shadow-2xl border border-slate-800/80 flex flex-col overflow-hidden" style={{ minHeight: '450px' }}>
@@ -1436,6 +1559,15 @@ function WebRTCLiveRoom({
                                 </button>
                               )}
                             </>
+                          )}
+                          {isProfessor && !isUserProfessor && (
+                            <button
+                              onClick={() => handleKickStudent(u.id)}
+                              title="Remover aluno da aula ativa"
+                              className="p-1 bg-rose-600/15 hover:bg-rose-600/30 text-rose-400 hover:text-rose-300 border border-rose-550/20 rounded-lg transition-all"
+                            >
+                              <UserMinus className="w-3 h-3" />
+                            </button>
                           )}
                         </div>
                       </div>
