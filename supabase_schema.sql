@@ -30,6 +30,7 @@ CREATE TABLE public.inscricoes (
     comprovativo_url TEXT NOT NULL,
     data_solicitacao TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
     data_aprovacao TIMESTAMP WITH TIME ZONE,
+    aprovado_por UUID REFERENCES public.perfis(id) ON DELETE SET NULL,
     UNIQUE (aluno_id, curso_id)
 );
 

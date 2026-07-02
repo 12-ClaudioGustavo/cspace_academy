@@ -394,14 +394,14 @@ export const getPendingEnrollments = async (): Promise<Inscricao[]> => {
     const supabase = createBrowserClient()
     const { data, error } = await supabase
       .from('inscricoes')
-      .select('*, perfis(*), cursos(*)')
+      .select('*, aluno:perfis!aluno_id(*), curso:cursos(*)')
       .eq('status', 'pendente')
-    if (!error && data) {
-      return data.map(item => ({
-        ...item,
-        aluno: item.perfis,
-        curso: item.cursos
-      })) as Inscricao[]
+    if (error) {
+      console.error("Error fetching pending enrollments:", error)
+      return []
+    }
+    if (data) {
+      return data as Inscricao[]
     }
   }
 
@@ -433,7 +433,11 @@ export const approveEnrollment = async (enrollmentId: string, approverId?: strin
         aprovado_por: approverId || null
       })
       .eq('id', enrollmentId)
-    return !error
+    if (error) {
+      console.error("Error approving enrollment:", error)
+      return false
+    }
+    return true
   }
 
   const list = getLocalStorageData<Inscricao[]>('cspace_enrollments', [])
@@ -458,7 +462,11 @@ export const rejectEnrollment = async (enrollmentId: string, approverId?: string
         aprovado_por: approverId || null
       })
       .eq('id', enrollmentId)
-    return !error
+    if (error) {
+      console.error("Error rejecting enrollment:", error)
+      return false
+    }
+    return true
   }
 
   const list = getLocalStorageData<Inscricao[]>('cspace_enrollments', [])
@@ -479,7 +487,11 @@ export const removeEnrollment = async (enrollmentId: string): Promise<boolean> =
       .from('inscricoes')
       .delete()
       .eq('id', enrollmentId)
-    return !error
+    if (error) {
+      console.error("Error removing enrollment:", error)
+      return false
+    }
+    return true
   }
 
   const list = getLocalStorageData<Inscricao[]>('cspace_enrollments', [])

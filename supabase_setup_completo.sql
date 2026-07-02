@@ -44,8 +44,12 @@ CREATE TABLE IF NOT EXISTS public.inscricoes (
     comprovativo_url TEXT NOT NULL,
     data_solicitacao TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
     data_aprovacao TIMESTAMP WITH TIME ZONE,
+    aprovado_por UUID REFERENCES public.perfis(id) ON DELETE SET NULL,
     UNIQUE (aluno_id, curso_id)
 );
+
+-- Adiciona aprovado_por se o schema antigo já existir
+ALTER TABLE public.inscricoes ADD COLUMN IF NOT EXISTS aprovado_por UUID REFERENCES public.perfis(id) ON DELETE SET NULL;
 
 -- 4. Aulas / Lives
 CREATE TABLE IF NOT EXISTS public.aulas (
