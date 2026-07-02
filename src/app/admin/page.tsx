@@ -69,7 +69,8 @@ import {
   BookOpenCheck,
   AlertTriangle,
   Mail,
-  RefreshCw
+  RefreshCw,
+  BarChart3
 } from 'lucide-react'
 
 export default function AdminDashboard() {
@@ -87,7 +88,7 @@ export default function AdminDashboard() {
   const [loading, setLoading] = useState(true)
 
   // Controle de Abas Administrativas (Sidebar)
-  const [activeTab, setActiveTab] = useState<'overview' | 'pagamentos' | 'cursos' | 'exercicios' | 'usuarios' | 'conferencias' | 'newsletter'>('overview')
+  const [activeTab, setActiveTab] = useState<'overview' | 'pagamentos' | 'cursos' | 'exercicios' | 'usuarios' | 'conferencias' | 'newsletter' | 'relatorios'>('overview')
 
   // Visualizador de Comprovativo (Modal)
   const [selectedReceipt, setSelectedReceipt] = useState<string | null>(null)
@@ -109,6 +110,7 @@ export default function AdminDashboard() {
   const [newUserError, setNewUserError] = useState<string | null>(null)
   const [fallbackSql, setFallbackSql] = useState<string | null>(null)
   const [copiedSql, setCopiedSql] = useState(false)
+  const [reportCourseFilter, setReportCourseFilter] = useState('')
 
   // Estados de Edição de Curso/Aula
   const [editCourseId, setEditCourseId] = useState<string | null>(null)
@@ -614,7 +616,7 @@ ON CONFLICT (id) DO UPDATE SET role = '${newUserRole}';`
 
   // Ações de Pagamento
   const handleApprove = async (id: string) => {
-    const success = await approveEnrollment(id)
+    const success = await approveEnrollment(id, user!.id)
     if (success) {
       setPendingPayments(prev => prev.filter(p => p.id !== id))
       showNotification('Inscrição aprovada com sucesso!')
@@ -623,7 +625,7 @@ ON CONFLICT (id) DO UPDATE SET role = '${newUserRole}';`
   }
 
   const handleReject = async (id: string) => {
-    const success = await rejectEnrollment(id)
+    const success = await rejectEnrollment(id, user!.id)
     if (success) {
       setPendingPayments(prev => prev.filter(p => p.id !== id))
       showNotification('Comprovativo recusado.')
@@ -988,6 +990,21 @@ ON CONFLICT (id) DO UPDATE SET role = '${newUserRole}';`
                 </span>
               )}
             </button>
+
+            <button
+              onClick={() => setActiveTab('relatorios')}
+              className={`w-full flex items-center justify-between p-3 rounded-xl text-xs font-semibold transition-all ${
+                activeTab === 'relatorios' 
+                  ? 'bg-indigo-500/10 text-indigo-400 border-l-4 border-indigo-500' 
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/30'
+              }`}
+            >
+              <span className="flex items-center gap-2.5">
+                <BarChart3 className="w-4 h-4" />
+                <span>Relatórios & Lucros</span>
+              </span>
+              <ChevronRight className="w-3.5 h-3.5 opacity-60" />
+            </button>
           </nav>
         </div>
 
@@ -1026,6 +1043,7 @@ ON CONFLICT (id) DO UPDATE SET role = '${newUserRole}';`
             {activeTab === 'exercicios' && 'Quizzes Acadêmicos'}
             {activeTab === 'usuarios' && 'Controle de Membros'}
             {activeTab === 'newsletter' && 'Subscritores da Newsletter'}
+            {activeTab === 'relatorios' && 'Relatório Financeiro & Transparência'}
           </h2>
           <div className="flex items-center gap-3">
             <span className="text-xs bg-[#0b101d] px-3.5 py-2 border border-slate-800 rounded-xl font-bold flex items-center gap-1.5">
@@ -2560,6 +2578,139 @@ ON CONFLICT (id) DO UPDATE SET role = '${newUserRole}';`
                   </table>
                 </div>
               )}
+            </div>
+          )}
+          {/* --- VIEW 8: RELATÓRIOS E LUCROS (TRANSPARÊNCIA) --- */}
+          {activeTab === 'relatorios' && (
+            <div className="space-y-6">
+              
+              {/* Filtro e Resumo */}
+              <div className="p-6 bg-[#0b101d] border border-slate-800 rounded-2xl shadow-xl space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                  <div>
+                    <h3 className="text-sm font-bold text-white uppercase tracking-wider">Filtro de Faturamento por Curso</h3>
+                    <p className="text-xs text-slate-400 mt-1">Consulte o desempenho financeiro e os aprovadores de pagamentos.</p>
+                  </div>
+                  
+                  <div className="w-full sm:w-64">
+                    <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Selecionar Curso</label>
+                    <select
+                      value={reportCourseFilter}
+                      onChange={(e) => setReportCourseFilter(e.target.value)}
+                      className="block w-full px-3 py-2 bg-[#070b13] border border-slate-800 rounded-xl focus:outline-none focus:border-indigo-500 text-slate-200 text-xs"
+                    >
+                      <option value="">Todos os Cursos</option>
+                      {courses.map(c => (
+                        <option key={c.id} value={c.id}>{c.titulo}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                {/* Resumo Dinâmico do Filtro */}
+                <div className="grid gap-4 sm:grid-cols-3 pt-2">
+                  <div className="p-4 bg-[#070b13] border border-slate-800/80 rounded-xl">
+                    <p className="text-[9px] font-bold text-slate-500 uppercase tracking-wider">Lucro do Filtro</p>
+                    <h4 className="text-lg font-black text-indigo-400 mt-1">
+                      {allEnrollments
+                        .filter(e => e.status === 'aprovado' && (!reportCourseFilter || e.curso_id === reportCourseFilter))
+                        .reduce((acc, curr) => acc + (curr.curso?.preco || 0), 0)
+                        .toLocaleString('pt-AO')} AOA
+                    </h4>
+                  </div>
+                  
+                  <div className="p-4 bg-[#070b13] border border-slate-800/80 rounded-xl">
+                    <p className="text-[9px] font-bold text-slate-500 uppercase tracking-wider">Matrículas Aprovadas</p>
+                    <h4 className="text-lg font-black text-emerald-450 mt-1">
+                      {allEnrollments.filter(e => e.status === 'aprovado' && (!reportCourseFilter || e.curso_id === reportCourseFilter)).length}
+                    </h4>
+                  </div>
+
+                  <div className="p-4 bg-[#070b13] border border-slate-800/80 rounded-xl">
+                    <p className="text-[9px] font-bold text-slate-500 uppercase tracking-wider">Total de Tentativas</p>
+                    <h4 className="text-lg font-black text-slate-400 mt-1">
+                      {allEnrollments.filter(e => !reportCourseFilter || e.curso_id === reportCourseFilter).length}
+                    </h4>
+                  </div>
+                </div>
+              </div>
+
+              {/* Lista Detalhada de Pagamentos e Aprovadores */}
+              <div className="p-6 bg-[#0b101d] border border-slate-800 rounded-2xl shadow-xl space-y-4">
+                <h3 className="text-sm font-bold text-white uppercase tracking-wider">Registro e Auditoria de Comprovativos</h3>
+                
+                {allEnrollments.filter(e => !reportCourseFilter || e.curso_id === reportCourseFilter).length === 0 ? (
+                  <p className="text-xs text-slate-500 py-6 text-center italic">Nenhuma matrícula registrada para este filtro.</p>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-xs text-left border-collapse">
+                      <thead>
+                        <tr className="bg-[#070b13] border-b border-slate-800 text-slate-400 font-bold uppercase tracking-wider text-[10px]">
+                          <th className="p-3">Estudante</th>
+                          <th className="p-3">Curso</th>
+                          <th className="p-3">Preço</th>
+                          <th className="p-3">Status</th>
+                          <th className="p-3">Auditado Por</th>
+                          <th className="p-3">Data Auditoria</th>
+                          <th className="p-3 text-right">Comprovante</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-800/60">
+                        {allEnrollments
+                          .filter(e => !reportCourseFilter || e.curso_id === reportCourseFilter)
+                          .map(e => (
+                            <tr key={e.id} className="hover:bg-slate-800/20 transition-colors">
+                              <td className="p-3">
+                                <p className="font-semibold text-slate-200">{e.aluno?.nome || '—'}</p>
+                                <p className="text-[10px] text-slate-500 mt-0.5">{e.aluno?.email || '—'}</p>
+                              </td>
+                              <td className="p-3 font-medium text-slate-350">{e.curso?.titulo || '—'}</td>
+                              <td className="p-3 font-mono text-slate-300 font-bold">
+                                {e.curso?.preco === 0 ? 'Gratuito' : `${e.curso?.preco?.toLocaleString('pt-AO')} AOA`}
+                              </td>
+                              <td className="p-3">
+                                <span className={`text-[9px] font-bold uppercase px-2 py-0.5 rounded ${
+                                  e.status === 'aprovado'
+                                    ? 'bg-emerald-500/10 text-emerald-450 border border-emerald-500/20'
+                                    : e.status === 'rejeitado'
+                                    ? 'bg-rose-500/10 text-rose-450 border border-rose-500/20'
+                                    : 'bg-yellow-500/10 text-yellow-450 border border-yellow-500/20'
+                                }`}>
+                                  {e.status}
+                                </span>
+                              </td>
+                              <td className="p-3">
+                                {e.aprovador ? (
+                                  <div>
+                                    <p className="font-semibold text-slate-200">{e.aprovador.nome}</p>
+                                    <p className="text-[9px] text-slate-500 uppercase tracking-wide font-bold">{e.aprovador.role}</p>
+                                  </div>
+                                ) : e.status !== 'pendente' ? (
+                                  <span className="text-slate-500 italic">Administrador</span>
+                                ) : (
+                                  <span className="text-slate-600 font-medium">Aguardando auditoria</span>
+                                )}
+                              </td>
+                              <td className="p-3 text-slate-500 font-mono">
+                                {e.data_aprovacao ? new Date(e.data_aprovacao).toLocaleString('pt-AO') : '—'}
+                              </td>
+                              <td className="p-3 text-right">
+                                <button
+                                  onClick={() => setSelectedReceipt(e.comprovativo_url)}
+                                  className="inline-flex items-center gap-1 text-[11px] font-bold text-indigo-400 hover:underline cursor-pointer"
+                                >
+                                  <Eye className="w-3.5 h-3.5" />
+                                  <span>Ver Comprovante</span>
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+
             </div>
           )}
 

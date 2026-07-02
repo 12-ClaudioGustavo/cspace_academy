@@ -50,7 +50,8 @@ import {
   Check,
   AlertTriangle,
   Calendar,
-  Menu
+  Menu,
+  BarChart3
 } from 'lucide-react'
 
 interface ProfessorDashboardProps {
@@ -68,7 +69,8 @@ export default function ProfessorDashboard({ user, logout }: ProfessorDashboardP
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false)
 
   // Controle de Abas Administrativas (Sidebar)
-  const [activeTab, setActiveTab] = useState<'overview' | 'cursos' | 'aulas' | 'conferencias' | 'exercicios' | 'materiais' | 'matriculas'>('overview')
+  const [activeTab, setActiveTab] = useState<'overview' | 'cursos' | 'aulas' | 'conferencias' | 'exercicios' | 'materiais' | 'matriculas' | 'relatorios'>('overview')
+  const [reportCourseFilter, setReportCourseFilter] = useState('')
 
   // Visualizador de Comprovativo (Modal)
   const [selectedReceipt, setSelectedReceipt] = useState<string | null>(null)
@@ -92,6 +94,7 @@ export default function ProfessorDashboard({ user, logout }: ProfessorDashboardP
   const [cursoPublicado, setCursoPublicado] = useState(true)
   const [isUploadingCapa, setIsUploadingCapa] = useState(false)
   const [capaUploadError, setCapaUploadError] = useState<string | null>(null)
+  const [cursoIsFree, setCursoIsFree] = useState(false)
 
   // Formulário de Aula
   const [selectedCourseId, setSelectedCourseId] = useState('')
@@ -304,6 +307,22 @@ export default function ProfessorDashboard({ user, logout }: ProfessorDashboardP
     setCursoPreco(c.preco.toString())
     setCursoCapa(c.capa_url)
     setCursoPublicado(c.publicado)
+    setCursoIsFree(c.preco === 0)
+  }
+
+  const handleDeleteCourseClick = async (id: string) => {
+    if (!confirm('Deseja realmente excluir este curso? Esta ação não pode ser desfeita.')) return
+    try {
+      const success = await deleteCourse(id)
+      if (success) {
+        setCourses(prev => prev.filter(c => c.id !== id))
+        showNotification('Curso excluído com sucesso.')
+        loadProfessorData()
+      }
+    } catch (err: any) {
+      console.error(err)
+      showNotification(err?.message || 'Erro ao excluir curso.')
+    }
   }
 
   // Salvar Aula (Criar ou Editar)
@@ -586,7 +605,7 @@ export default function ProfessorDashboard({ user, logout }: ProfessorDashboardP
   // Aprovar / Recusar Inscrições
   const handleApproveEnrollment = async (id: string) => {
     try {
-      const success = await approveEnrollment(id)
+      const success = await approveEnrollment(id, user.id)
       if (success) {
         showNotification('Matrícula aprovada! O aluno agora tem acesso ao curso.')
         loadProfessorData()
@@ -599,7 +618,7 @@ export default function ProfessorDashboard({ user, logout }: ProfessorDashboardP
   const handleRejectEnrollment = async (id: string) => {
     if (!confirm('Deseja realmente recusar esta inscrição?')) return
     try {
-      const success = await rejectEnrollment(id)
+      const success = await rejectEnrollment(id, user.id)
       if (success) {
         showNotification('Inscrição recusada.')
         loadProfessorData()
@@ -884,6 +903,18 @@ export default function ProfessorDashboard({ user, logout }: ProfessorDashboardP
             <Users className="w-4 h-4" />
             <span>Matrículas ({pendingPaymentsCount})</span>
           </button>
+
+          <button
+            onClick={() => setActiveTab('relatorios')}
+            className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all cursor-pointer ${
+              activeTab === 'relatorios' 
+                ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-650/15' 
+                : 'text-slate-400 hover:bg-slate-800/50 hover:text-white'
+            }`}
+          >
+            <BarChart3 className="w-4 h-4" />
+            <span>Relatórios & Lucros</span>
+          </button>
         </nav>
 
         <div className="pt-4 border-t border-slate-800">
@@ -922,6 +953,7 @@ export default function ProfessorDashboard({ user, logout }: ProfessorDashboardP
               {activeTab === 'exercicios' && 'Banco de Exercícios'}
               {activeTab === 'materiais' && 'Arquivos e Apostilas'}
               {activeTab === 'matriculas' && 'Confirmação de Matrículas'}
+              {activeTab === 'relatorios' && 'Relatório Financeiro & Transparência'}
             </h2>
           </div>
 
@@ -1131,48 +1163,179 @@ export default function ProfessorDashboard({ user, logout }: ProfessorDashboardP
 
           {/* TAB 2: MEUS CURSOS */}
           {activeTab === 'cursos' && (
-            <div className="space-y-4">
-              <h3 className="text-sm font-bold text-white uppercase tracking-wider flex items-center gap-2">
-                <BookOpen className="w-5 h-5 text-indigo-500" />
-                <span>Meus Cursos Ministrados ({myCoursesCount})</span>
-              </h3>
-
-              {courses.length === 0 ? (
-                <div className="p-8 text-center bg-[#0c1220] border border-slate-800 rounded-2xl">
-                  <p className="text-xs text-slate-500">Você ainda não possui nenhum curso cadastrado como professor.</p>
-                </div>
-              ) : (
-                <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
-                  {courses.map(c => (
-                    <div 
-                      key={c.id} 
-                      className="bg-[#0c1220] border border-slate-800 rounded-2xl overflow-hidden hover:border-indigo-500/20 transition-all flex flex-col justify-between"
+            <div className="grid gap-8 lg:grid-cols-5">
+              {/* Form de Cadastro/Edição de Curso */}
+              <div className="lg:col-span-2 p-6 bg-[#0b101d] border border-slate-800 rounded-2xl shadow-2xl space-y-6">
+                <h3 className="text-sm font-bold text-white uppercase tracking-wider border-b border-slate-800 pb-3 flex items-center justify-between">
+                  <span className="flex items-center gap-2">
+                    <BookOpen className="w-5 h-5 text-indigo-500" />
+                    <span>{editCourseId ? 'Editar Curso' : 'Novo Curso'}</span>
+                  </span>
+                  {editCourseId && (
+                    <button 
+                      onClick={() => {
+                        setEditCourseId(null); setCursoTitulo(''); setCursoDescricao(''); setCursoPreco(''); setCursoCapa(''); setCursoPublicado(true); setCursoIsFree(false);
+                      }}
+                      className="text-slate-400 hover:text-white"
                     >
-                      <div className="h-32 w-full bg-slate-900 relative">
-                        <img src={c.capa_url} alt={c.titulo} className="w-full h-full object-cover" />
-                        <div className="absolute top-2 right-2 flex gap-1.5">
-                          {c.publicado ? (
-                            <span className="px-2 py-0.5 text-[8px] font-bold bg-emerald-500/90 text-white rounded-full">Ativo</span>
-                          ) : (
-                            <span className="px-2 py-0.5 text-[8px] font-bold bg-slate-700/90 text-white rounded-full">Rascunho</span>
-                          )}
-                        </div>
-                      </div>
+                      <X className="w-4 h-4" />
+                    </button>
+                  )}
+                </h3>
 
-                      <div className="p-4 space-y-3 flex-1 flex flex-col justify-between">
-                        <div className="space-y-1">
-                          <h4 className="text-xs font-bold text-white line-clamp-1">{c.titulo}</h4>
-                          <p className="text-[10px] text-slate-400 line-clamp-2 leading-relaxed">{c.descricao}</p>
-                        </div>
+                <form onSubmit={handleSaveCourse} className="space-y-4 text-xs">
+                  <div>
+                    <label className="block font-semibold text-slate-400 mb-1.5 uppercase">Título do Curso</label>
+                    <input
+                      type="text"
+                      required
+                      value={cursoTitulo}
+                      onChange={(e) => setCursoTitulo(e.target.value)}
+                      placeholder="Ex: Introdução ao Next.js..."
+                      className="block w-full px-3 py-2.5 bg-[#070b13] border border-slate-800 rounded-xl focus:outline-none focus:border-indigo-500 text-slate-200"
+                    />
+                  </div>
+                  
+                  <div>
+                    <label className="block font-semibold text-slate-400 mb-1.5 uppercase">Descrição / Resumo</label>
+                    <textarea
+                      rows={3}
+                      value={cursoDescricao}
+                      onChange={(e) => setCursoDescricao(e.target.value)}
+                      placeholder="Descrição detalhada do curso..."
+                      className="block w-full px-3 py-2.5 bg-[#070b13] border border-slate-800 rounded-xl focus:outline-none focus:border-indigo-500 text-slate-200"
+                    />
+                  </div>
 
-                        <div className="flex items-center justify-between pt-3 border-t border-slate-800">
-                          <span className="text-xs font-black text-indigo-400">{c.preco.toLocaleString()} AOA</span>
-                        </div>
-                      </div>
+                  <div className="flex items-center gap-2 py-1">
+                    <input
+                      type="checkbox"
+                      id="cursoIsFree"
+                      checked={cursoIsFree}
+                      onChange={(e) => {
+                        setCursoIsFree(e.target.checked)
+                        if (e.target.checked) {
+                          setCursoPreco('0')
+                        } else if (cursoPreco === '0') {
+                          setCursoPreco('')
+                        }
+                      }}
+                      className="rounded border-slate-800 text-indigo-650 focus:ring-indigo-500 bg-[#070b13]"
+                    />
+                    <label htmlFor="cursoIsFree" className="font-semibold text-slate-400 uppercase cursor-pointer text-xs">Este curso é gratuito</label>
+                  </div>
+
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <div>
+                      <label className="block font-semibold text-slate-400 mb-1.5 uppercase">Preço (Kwanzas)</label>
+                      <input
+                        type="number"
+                        required={!cursoIsFree}
+                        disabled={cursoIsFree}
+                        value={cursoIsFree ? '0' : cursoPreco}
+                        onChange={(e) => setCursoPreco(e.target.value)}
+                        placeholder="25000"
+                        className="block w-full px-3 py-2.5 bg-[#070b13] border border-slate-800 rounded-xl focus:outline-none focus:border-indigo-500 text-slate-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                      />
                     </div>
-                  ))}
-                </div>
-              )}
+                    
+                    <div className="space-y-2">
+                      <label className="block font-semibold text-slate-400 uppercase">Imagem Capa do Curso</label>
+                      <input
+                        type="text"
+                        value={cursoCapa}
+                        onChange={(e) => setCursoCapa(e.target.value)}
+                        placeholder="Link da imagem..."
+                        className="block w-full px-3 py-2.5 bg-[#070b13] border border-slate-800 rounded-xl focus:outline-none focus:border-indigo-500 text-slate-200 text-xs"
+                      />
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="file"
+                          accept="image/*"
+                          onChange={handleCapaFileChange}
+                          className="text-[10px] text-slate-400 file:mr-2 file:py-1 file:px-2.5 file:rounded file:border-0 file:text-[9px] file:font-semibold file:bg-indigo-500/10 file:text-indigo-400 file:hover:bg-indigo-500/20 cursor-pointer"
+                        />
+                        {isUploadingCapa && (
+                          <span className="text-[9px] text-indigo-400 animate-pulse">Carregando...</span>
+                        )}
+                      </div>
+                      {capaUploadError && (
+                        <p className="text-[9px] text-rose-450 font-semibold leading-tight">{capaUploadError}</p>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2 py-1">
+                    <input
+                      type="checkbox"
+                      id="cursoPublicado"
+                      checked={cursoPublicado}
+                      onChange={(e) => setCursoPublicado(e.target.checked)}
+                      className="rounded border-slate-800 text-indigo-650 focus:ring-indigo-500 bg-[#070b13]"
+                    />
+                    <label htmlFor="cursoPublicado" className="font-semibold text-slate-400 uppercase cursor-pointer text-xs">Publicar imediatamente</label>
+                  </div>
+
+                  <button
+                    type="submit"
+                    className="w-full py-2.5 bg-indigo-650 hover:bg-indigo-700 text-white rounded-xl font-bold uppercase tracking-wider transition-colors cursor-pointer"
+                  >
+                    {editCourseId ? 'Atualizar Curso' : 'Criar Curso'}
+                  </button>
+                </form>
+              </div>
+
+              {/* Lista de Cursos */}
+              <div className="lg:col-span-3 space-y-4">
+                <h3 className="text-sm font-bold text-white uppercase tracking-wider flex items-center gap-2">
+                  <BookOpen className="w-5 h-5 text-indigo-500" />
+                  <span>Meus Cursos Ministrados ({myCoursesCount})</span>
+                </h3>
+
+                {courses.length === 0 ? (
+                  <div className="p-8 text-center bg-[#0c1220] border border-slate-800 rounded-2xl">
+                    <p className="text-xs text-slate-500">Você ainda não possui nenhum curso cadastrado como professor.</p>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {courses.map(c => (
+                      <div 
+                        key={c.id} 
+                        className="flex items-center justify-between p-4 bg-[#0c1220] border border-slate-800 rounded-2xl hover:border-indigo-500/20 transition-all gap-4"
+                      >
+                        <div className="flex items-center gap-3">
+                          <div className="h-10 w-16 bg-slate-800 rounded overflow-hidden shrink-0 border border-slate-700">
+                            <img src={c.capa_url} alt={c.titulo} className="h-full w-full object-cover" />
+                          </div>
+                          <div>
+                            <p className="text-xs font-bold text-slate-200 line-clamp-1">{c.titulo}</p>
+                            <p className="text-[10px] text-slate-500 mt-1 font-mono">
+                              {c.preco === 0 ? 'Gratuito' : `${c.preco.toLocaleString('pt-AO')} AOA`} • {c.publicado ? 'Publicado' : 'Rascunho'}
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-2 shrink-0">
+                          <button
+                            onClick={() => handleEditCourseClick(c)}
+                            className="h-8 w-8 flex items-center justify-center bg-slate-800 hover:bg-slate-700 rounded-lg text-slate-300 hover:text-white transition-colors cursor-pointer"
+                            title="Editar Curso"
+                          >
+                            <Pencil className="w-4 h-4" />
+                          </button>
+                          <button
+                            onClick={() => handleDeleteCourseClick(c.id)}
+                            className="h-8 w-8 flex items-center justify-center bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/20 rounded-lg text-rose-450 transition-colors cursor-pointer"
+                            title="Excluir Curso"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
           )}
 
@@ -1900,6 +2063,140 @@ export default function ProfessorDashboard({ user, logout }: ProfessorDashboardP
                   </table>
                 </div>
               )}
+            </div>
+          )}
+
+          {/* TAB 8: RELATÓRIOS E LUCROS */}
+          {activeTab === 'relatorios' && (
+            <div className="space-y-6">
+              
+              {/* Filtro e Resumo */}
+              <div className="p-6 bg-[#0c1220] border border-slate-800 rounded-2xl shadow-xl space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                  <div>
+                    <h3 className="text-sm font-bold text-white uppercase tracking-wider">Faturamento dos Meus Cursos</h3>
+                    <p className="text-xs text-slate-400 mt-1">Consulte o desempenho financeiro e quem aprovou cada pagamento.</p>
+                  </div>
+                  
+                  <div className="w-full sm:w-64">
+                    <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Filtrar por Curso</label>
+                    <select
+                      value={reportCourseFilter}
+                      onChange={(e) => setReportCourseFilter(e.target.value)}
+                      className="block w-full px-3 py-2 bg-[#070b13] border border-slate-800 rounded-xl focus:outline-none focus:border-indigo-500 text-slate-200 text-xs"
+                    >
+                      <option value="">Todos os Meus Cursos</option>
+                      {courses.map(c => (
+                        <option key={c.id} value={c.id}>{c.titulo}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                {/* Resumo Dinâmico do Filtro */}
+                <div className="grid gap-4 sm:grid-cols-3 pt-2">
+                  <div className="p-4 bg-[#070b13] border border-slate-800/80 rounded-xl">
+                    <p className="text-[9px] font-bold text-slate-500 uppercase tracking-wider">Lucro Acumulado</p>
+                    <h4 className="text-lg font-black text-indigo-400 mt-1">
+                      {myEnrollments
+                        .filter(e => e.status === 'aprovado' && (!reportCourseFilter || e.curso_id === reportCourseFilter))
+                        .reduce((acc, curr) => acc + (curr.curso?.preco || 0), 0)
+                        .toLocaleString('pt-AO')} AOA
+                    </h4>
+                  </div>
+                  
+                  <div className="p-4 bg-[#070b13] border border-slate-800/80 rounded-xl">
+                    <p className="text-[9px] font-bold text-slate-500 uppercase tracking-wider">Matrículas Aprovadas</p>
+                    <h4 className="text-lg font-black text-emerald-450 mt-1">
+                      {myEnrollments.filter(e => e.status === 'aprovado' && (!reportCourseFilter || e.curso_id === reportCourseFilter)).length}
+                    </h4>
+                  </div>
+
+                  <div className="p-4 bg-[#070b13] border border-slate-800/80 rounded-xl">
+                    <p className="text-[9px] font-bold text-slate-500 uppercase tracking-wider font-mono">Solicitações Totais</p>
+                    <h4 className="text-lg font-black text-slate-400 mt-1">
+                      {myEnrollments.filter(e => !reportCourseFilter || e.curso_id === reportCourseFilter).length}
+                    </h4>
+                  </div>
+                </div>
+              </div>
+
+              {/* Tabela Detalhada */}
+              <div className="p-6 bg-[#0c1220] border border-slate-800 rounded-2xl shadow-xl space-y-4">
+                <h3 className="text-sm font-bold text-white uppercase tracking-wider">Registro e Auditoria dos Meus Alunos</h3>
+                
+                {myEnrollments.filter(e => !reportCourseFilter || e.curso_id === reportCourseFilter).length === 0 ? (
+                  <p className="text-xs text-slate-500 py-6 text-center italic">Nenhuma matrícula registrada para este filtro.</p>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-xs text-left border-collapse">
+                      <thead>
+                        <tr className="bg-[#070b13] border-b border-slate-800 text-slate-400 font-bold uppercase tracking-wider text-[10px]">
+                          <th className="p-3">Estudante</th>
+                          <th className="p-3">Curso</th>
+                          <th className="p-3">Preço</th>
+                          <th className="p-3">Status</th>
+                          <th className="p-3">Auditado Por</th>
+                          <th className="p-3">Data Auditoria</th>
+                          <th className="p-3 text-right">Comprovante</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-800/60">
+                        {myEnrollments
+                          .filter(e => !reportCourseFilter || e.curso_id === reportCourseFilter)
+                          .map(e => (
+                            <tr key={e.id} className="hover:bg-slate-800/20 transition-colors">
+                              <td className="p-3">
+                                <p className="font-semibold text-slate-200">{e.aluno?.nome || '—'}</p>
+                                <p className="text-[10px] text-slate-500 mt-0.5">{e.aluno?.email || '—'}</p>
+                              </td>
+                              <td className="p-3 font-medium text-slate-350">{e.curso?.titulo || '—'}</td>
+                              <td className="p-3 font-mono text-slate-300 font-bold">
+                                {e.curso?.preco === 0 ? 'Gratuito' : `${e.curso?.preco?.toLocaleString('pt-AO')} AOA`}
+                              </td>
+                              <td className="p-3">
+                                <span className={`text-[9px] font-bold uppercase px-2 py-0.5 rounded ${
+                                  e.status === 'aprovado'
+                                    ? 'bg-emerald-500/10 text-emerald-450 border border-emerald-500/20'
+                                    : e.status === 'rejeitado'
+                                    ? 'bg-rose-500/10 text-rose-450 border border-rose-500/20'
+                                    : 'bg-yellow-500/10 text-yellow-450 border border-yellow-500/20'
+                                }`}>
+                                  {e.status}
+                                </span>
+                              </td>
+                              <td className="p-3">
+                                {e.aprovador ? (
+                                  <div>
+                                    <p className="font-semibold text-slate-200">{e.aprovador.nome}</p>
+                                    <p className="text-[9px] text-slate-500 uppercase tracking-wide font-bold">{e.aprovador.role}</p>
+                                  </div>
+                                ) : e.status !== 'pendente' ? (
+                                  <span className="text-slate-500 italic">Administrador</span>
+                                ) : (
+                                  <span className="text-slate-600 font-medium">Aguardando auditoria</span>
+                                )}
+                              </td>
+                              <td className="p-3 text-slate-500 font-mono">
+                                {e.data_aprovacao ? new Date(e.data_aprovacao).toLocaleString('pt-AO') : '—'}
+                              </td>
+                              <td className="p-3 text-right">
+                                <button
+                                  onClick={() => setSelectedReceipt(e.comprovativo_url)}
+                                  className="inline-flex items-center gap-1 text-[11px] font-bold text-indigo-400 hover:underline cursor-pointer"
+                                >
+                                  <Eye className="w-3.5 h-3.5" />
+                                  <span>Ver Comprovante</span>
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+
             </div>
           )}
 

@@ -29,8 +29,10 @@ export interface Inscricao {
   comprovativo_url: string
   data_solicitacao: string
   data_aprovacao?: string
+  aprovado_por?: string | null
   aluno?: Perfil
   curso?: Curso
+  aprovador?: Perfil
 }
 
 export interface Aula {
@@ -427,12 +429,16 @@ export const getPendingEnrollments = async (): Promise<Inscricao[]> => {
   }))
 }
 
-export const approveEnrollment = async (enrollmentId: string): Promise<boolean> => {
+export const approveEnrollment = async (enrollmentId: string, approverId?: string): Promise<boolean> => {
   if (isSupabaseConfigured()) {
     const supabase = createBrowserClient()
     const { error } = await supabase
       .from('inscricoes')
-      .update({ status: 'aprovado', data_aprovacao: new Date().toISOString() })
+      .update({ 
+        status: 'aprovado', 
+        data_aprovacao: new Date().toISOString(),
+        aprovado_por: approverId || null
+      })
       .eq('id', enrollmentId)
     return !error
   }
@@ -442,18 +448,22 @@ export const approveEnrollment = async (enrollmentId: string): Promise<boolean> 
   if (index !== -1) {
     list[index].status = 'aprovado'
     list[index].data_aprovacao = new Date().toISOString()
+    list[index].aprovado_por = approverId || null
     saveLocalStorageData('cspace_enrollments', list)
     return true
   }
   return false
 }
 
-export const rejectEnrollment = async (enrollmentId: string): Promise<boolean> => {
+export const rejectEnrollment = async (enrollmentId: string, approverId?: string): Promise<boolean> => {
   if (isSupabaseConfigured()) {
     const supabase = createBrowserClient()
     const { error } = await supabase
       .from('inscricoes')
-      .update({ status: 'rejeitado' })
+      .update({ 
+        status: 'rejeitado',
+        aprovado_por: approverId || null
+      })
       .eq('id', enrollmentId)
     return !error
   }
@@ -462,6 +472,7 @@ export const rejectEnrollment = async (enrollmentId: string): Promise<boolean> =
   const index = list.findIndex(item => item.id === enrollmentId)
   if (index !== -1) {
     list[index].status = 'rejeitado'
+    list[index].aprovado_por = approverId || null
     saveLocalStorageData('cspace_enrollments', list)
     return true
   }
@@ -764,7 +775,7 @@ export const getAllEnrollments = async (): Promise<Inscricao[]> => {
     const supabase = createBrowserClient()
     const { data, error } = await supabase
       .from('inscricoes')
-      .select('*, aluno:perfis!aluno_id(*), curso:cursos(*)')
+      .select('*, aluno:perfis!aluno_id(*), curso:cursos(*), aprovador:perfis!aprovado_por(*)')
       .order('data_solicitacao', { ascending: false })
     if (!error && data) {
       return data as Inscricao[]
@@ -780,7 +791,8 @@ export const getAllEnrollments = async (): Promise<Inscricao[]> => {
       status: 'aprovado',
       comprovativo_url: '/proofs/comprovativo_mock.pdf',
       data_solicitacao: new Date().toISOString(),
-      data_aprovacao: new Date().toISOString()
+      data_aprovacao: new Date().toISOString(),
+      aprovado_por: 'mock-admin-id'
     }
   ])
   const mockStudent: Perfil = {
@@ -790,11 +802,19 @@ export const getAllEnrollments = async (): Promise<Inscricao[]> => {
     role: 'aluno',
     criado_em: new Date().toISOString()
   }
-  return list.map(item => ({
-    ...item,
-    aluno: mockStudent,
-    curso: MOCK_COURSES.find(c => c.id === item.curso_id)
-  }))
+  const profiles = getLocalStorageData<Perfil[]>('cspace_profiles', [])
+  return list.map(item => {
+    const aluno = profiles.find(p => p.id === item.aluno_id) || mockStudent
+    const coursesList = getLocalStorageData<Curso[]>('cspace_courses', MOCK_COURSES)
+    const curso = coursesList.find(c => c.id === item.curso_id)
+    const aprovador = item.aprovado_por ? (profiles.find(p => p.id === item.aprovado_por) || { nome: 'Administrador (Mock)' } as Perfil) : undefined
+    return {
+      ...item,
+      aluno,
+      curso,
+      aprovador
+    }
+  })
 }
 
 export const getAllExercises = async (): Promise<Exercicio[]> => {
