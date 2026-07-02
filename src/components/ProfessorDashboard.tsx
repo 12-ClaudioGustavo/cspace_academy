@@ -21,6 +21,7 @@ import {
   isSupabaseConfigured,
   createMaterial,
   deleteMaterial,
+  updateMaterialTitle,
   Inscricao, 
   Curso,
   Aula,
@@ -548,6 +549,37 @@ export default function ProfessorDashboard({ user, logout }: ProfessorDashboardP
     } catch (err: any) {
       console.error('Erro ao excluir material:', err)
       showNotification(err?.message || 'Erro ao excluir material.')
+    }
+  }
+
+  const handleEditMaterialTitle = async (lessonId: string, materialId: string, currentTitle: string) => {
+    const newTitle = prompt('Editar nome do material:', currentTitle)
+    if (newTitle === null) return
+    if (!newTitle.trim()) {
+      showNotification('O nome do material não pode ser vazio.')
+      return
+    }
+    try {
+      const success = await updateMaterialTitle(materialId, newTitle.trim())
+      if (success) {
+        setLessonDetailsMap(prev => {
+          const current = prev[lessonId]
+          if (!current) return prev
+          return {
+            ...prev,
+            [lessonId]: {
+              ...current,
+              materiais: (current.materiais || []).map(m => 
+                m.id === materialId ? { ...m, titulo: newTitle.trim() } : m
+              )
+            }
+          }
+        })
+        showNotification('Nome do material atualizado.')
+      }
+    } catch (err: any) {
+      console.error('Erro ao atualizar material:', err)
+      showNotification(err?.message || 'Erro ao atualizar nome do material.')
     }
   }
 
@@ -1710,12 +1742,22 @@ export default function ProfessorDashboard({ user, logout }: ProfessorDashboardP
                                             Visualizar Link do Arquivo
                                           </a>
                                         </div>
-                                        <button
-                                          onClick={() => handleDeleteMaterial(lesson.id, mat.id)}
-                                          className="p-1 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/25 rounded-md transition-colors cursor-pointer"
-                                        >
-                                          <Trash2 className="w-3 h-3" />
-                                        </button>
+                                        <div className="flex items-center gap-1.5 shrink-0">
+                                          <button
+                                            onClick={() => handleEditMaterialTitle(lesson.id, mat.id, mat.titulo)}
+                                            className="p-1 bg-slate-800 hover:bg-slate-700 text-slate-350 border border-slate-700/80 rounded-md transition-colors cursor-pointer"
+                                            title="Editar nome"
+                                          >
+                                            <Pencil className="w-3 h-3" />
+                                          </button>
+                                          <button
+                                            onClick={() => handleDeleteMaterial(lesson.id, mat.id)}
+                                            className="p-1 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/25 rounded-md transition-colors cursor-pointer"
+                                            title="Excluir material"
+                                          >
+                                            <Trash2 className="w-3 h-3" />
+                                          </button>
+                                        </div>
                                       </div>
                                     ))}
                                   </div>

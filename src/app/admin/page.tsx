@@ -33,6 +33,7 @@ import {
   isSupabaseConfigured,
   createMaterial,
   deleteMaterial,
+  updateMaterialTitle,
   Inscricao, 
   Curso,
   Aula,
@@ -325,6 +326,37 @@ export default function AdminDashboard() {
     } catch (err: any) {
       console.error('Erro ao excluir material:', err)
       showNotification(err?.message || 'Erro ao excluir material.')
+    }
+  }
+
+  const handleEditMaterialTitle = async (lessonId: string, materialId: string, currentTitle: string) => {
+    const newTitle = prompt('Editar nome do material:', currentTitle)
+    if (newTitle === null) return
+    if (!newTitle.trim()) {
+      showNotification('O nome do material não pode ser vazio.')
+      return
+    }
+    try {
+      const success = await updateMaterialTitle(materialId, newTitle.trim())
+      if (success) {
+        setLessonDetailsMap(prev => {
+          const current = prev[lessonId]
+          if (!current) return prev
+          return {
+            ...prev,
+            [lessonId]: {
+              ...current,
+              materiais: (current.materiais || []).map(m => 
+                m.id === materialId ? { ...m, titulo: newTitle.trim() } : m
+              )
+            }
+          }
+        })
+        showNotification('Nome do material atualizado.')
+      }
+    } catch (err: any) {
+      console.error('Erro ao atualizar material:', err)
+      showNotification(err?.message || 'Erro ao atualizar nome do material.')
     }
   }
 
@@ -1682,12 +1714,22 @@ ON CONFLICT (id) DO UPDATE SET role = '${newUserRole}';`
                                             <FileText className="w-3.5 h-3.5 text-red-400 shrink-0" />
                                             <span>{mat.titulo}</span>
                                           </a>
-                                          <button
-                                            onClick={() => handleDeleteMaterial(lesson.id, mat.id)}
-                                            className="text-rose-400 hover:text-rose-350 p-1 rounded hover:bg-rose-500/10 transition-colors"
-                                          >
-                                            <Trash2 className="w-3 h-3" />
-                                          </button>
+                                          <div className="flex items-center gap-1 shrink-0">
+                                            <button
+                                              onClick={() => handleEditMaterialTitle(lesson.id, mat.id, mat.titulo)}
+                                              className="text-slate-400 hover:text-slate-300 p-1 rounded hover:bg-slate-800 transition-colors"
+                                              title="Editar nome"
+                                            >
+                                              <Pencil className="w-3 h-3" />
+                                            </button>
+                                            <button
+                                              onClick={() => handleDeleteMaterial(lesson.id, mat.id)}
+                                              className="text-rose-400 hover:text-rose-350 p-1 rounded hover:bg-rose-500/10 transition-colors"
+                                              title="Excluir material"
+                                            >
+                                              <Trash2 className="w-3 h-3" />
+                                            </button>
+                                          </div>
                                         </div>
                                       ))
                                     )}

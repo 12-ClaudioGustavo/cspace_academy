@@ -854,3 +854,26 @@ export const deleteMaterial = async (id: string): Promise<boolean> => {
   saveLocalStorageData('cspace_materials', filtered)
   return true
 }
+
+export const updateMaterialTitle = async (id: string, titulo: string): Promise<boolean> => {
+  if (isSupabaseConfigured()) {
+    const supabase = createBrowserClient()
+    const { error } = await supabase
+      .from('materiais')
+      .update({ titulo })
+      .eq('id', id)
+    if (error) {
+      console.error("Error updating material title:", error)
+      throw new Error(error.message || "Erro ao atualizar título do material no banco de dados.")
+    }
+    return true
+  }
+  const list = getLocalStorageData<Material[]>('cspace_materials', MOCK_MATERIALS)
+  const index = list.findIndex(m => m.id === id)
+  if (index !== -1) {
+    list[index].titulo = titulo
+    saveLocalStorageData('cspace_materials', list)
+    return true
+  }
+  return false
+}
