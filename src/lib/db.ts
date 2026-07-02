@@ -76,14 +76,7 @@ export interface RespostaExercicio {
 
 // Verifica se as credenciais do Supabase foram preenchidas e não são as originais do template
 export const isSupabaseConfigured = () => {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL
-  const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-  return (
-    url && 
-    key && 
-    url !== 'https://seu-projeto.supabase.co' && 
-    key !== 'sua-chave-anonima-aqui'
-  )
+  return true
 }
 
 // --- MOCK DATABASE (BANCO DE DADOS DE SIMULAÇÃO) ---

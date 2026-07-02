@@ -84,18 +84,6 @@ export default function LoginPage() {
           <p className="text-xs text-slate-500 dark:text-slate-400 mt-1.5">Insira os seus dados de acesso</p>
         </div>
 
-        {/* Demo Mode Guide */}
-        {isDemo && (
-          <div className="mb-6 p-4 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-800 dark:text-amber-300 text-xs leading-normal">
-            <div className="flex items-start gap-2">
-              <AlertCircle className="w-4 h-4 shrink-0 text-amber-500 mt-0.5" />
-              <div>
-                <p className="font-semibold">Simulador de Login Ativado</p>
-                <p className="mt-1">Digite qualquer e-mail contendo <code className="px-1 py-0.5 bg-amber-500/20 rounded font-mono">admin</code> para simular a conta administrativa, ou qualquer outro e-mail para simular o painel do aluno.</p>
-              </div>
-            </div>
-          </div>
-        )}
 
         {error && (
           <div className="mb-5 p-3 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-600 dark:text-rose-400 text-xs flex items-center gap-2">

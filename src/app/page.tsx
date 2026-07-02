@@ -92,12 +92,6 @@ export default function LandingPage() {
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 dark:bg-[#070b13] dark:text-slate-100 font-sans transition-colors duration-300">
       
-      {/* Banner de Modo Demo */}
-      {isDemo && (
-        <div className="bg-gradient-to-r from-amber-600 to-orange-700 text-white text-xs py-2 px-4 text-center font-medium flex items-center justify-center gap-2">
-          <span>⚠️ Modo de Demonstração Ativo: O site está rodando com banco de dados local. Use o painel flutuante à direita para testar.</span>
-        </div>
-      )}
 
       {/* Header / Navegação */}
       <header className="sticky top-0 z-40 w-full border-b border-slate-200/80 bg-white/80 backdrop-blur-md dark:border-slate-800/80 dark:bg-[#070b13]/80 transition-colors">

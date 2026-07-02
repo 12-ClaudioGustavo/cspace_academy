@@ -14,6 +14,7 @@ import {
   createLesson, 
   createExercise,
   updateCourse,
+  deleteCourse,
   updateLesson,
   deleteLesson,
   deleteExercise,

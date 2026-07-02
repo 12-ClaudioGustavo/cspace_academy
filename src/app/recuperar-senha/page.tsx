@@ -101,12 +101,6 @@ export default function RecuperarSenhaPage() {
               </p>
             </div>
 
-            {isDemo && (
-              <div className="mb-5 p-3 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-400 text-xs flex items-start gap-2">
-                <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-                <span>Modo Demonstração: o envio de emails requer o Supabase Auth configurado no <code className="bg-amber-500/20 px-1 rounded">.env.local</code>.</span>
-              </div>
-            )}
 
             {error && (
               <div className="mb-5 p-3 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-400 text-xs flex items-center gap-2">
